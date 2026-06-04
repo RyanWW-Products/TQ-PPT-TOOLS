@@ -41,7 +41,8 @@ try {
         'X-GitHub-Api-Version' = '2022-11-28'
     }
     function Get-ContentsUrl([string]$path) {
-        $enc = ($path -replace ' ', '%20')
+        # Percent-encode each segment (handles spaces, &, +, ...) but keep the slashes.
+        $enc = ($path -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
         "https://api.github.com/repos/$Owner/$Repo/contents/$enc`?ref=$Branch"
     }
 

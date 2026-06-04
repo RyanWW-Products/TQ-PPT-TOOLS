@@ -31,7 +31,7 @@ Private Const GH_BRANCH    As String = "main"
 ' --- Fixed install layout (matches the installer) ---------------------------
 Private Const ADDIN_SUBDIR   As String = "Trial Ex Addin\"   ' under %APPDATA%\Microsoft\AddIns\
 Private Const ADDIN_FILENAME As String = "TrialQuest.ppam"
-Private Const STAGING_SUBDIR As String = "_staging\"
+Private Const STAGING_SUBDIR As String = "TrialQuestUpdate\" ' under %TEMP% (NOT the add-in dir, so the swapper can clean up without locking itself)
 
 ' --- Registry (HKCU\Software\TrialQuest\Addin\) ------------------------------
 Private Const REG_ROOT As String = "HKEY_CURRENT_USER\Software\TrialQuest\Addin\"
@@ -181,7 +181,7 @@ End Function
 Private Function StageAddinAndSwap(ByRef errOut As String) As Boolean
     Dim staging As String, staged As String, target As String, script As String, pptExe As String
 
-    staging = AddInDir() & STAGING_SUBDIR
+    staging = Environ$("TEMP") & "\" & STAGING_SUBDIR
     EnsureFolder staging
     staged = staging & ADDIN_FILENAME
     target = AddInDir() & ADDIN_FILENAME
@@ -217,7 +217,7 @@ Private Sub WriteSwapperScript(ByVal scriptPath As String, ByVal staged As Strin
     ts.WriteLine "  try { Copy-Item -LiteralPath $staged -Destination $target -Force; break }"
     ts.WriteLine "  catch { Start-Sleep -Seconds 1 }"
     ts.WriteLine "}"
-    ts.WriteLine "Remove-Item -LiteralPath (Split-Path $staged -Parent) -Recurse -Force"
+    ts.WriteLine "Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue"
     ts.WriteLine "if (Test-Path $ppt) { Start-Process -FilePath $ppt } else { Start-Process powerpnt }"
     ts.Close
 End Sub
@@ -282,10 +282,20 @@ Private Function ContentsUrl(ByVal repoPath As String) As String
                   "/contents/" & UrlEncodePath(repoPath) & "?ref=" & GH_BRANCH
 End Function
 
-' Encode a repo path, preserving "/" but escaping spaces (the only special
-' character our paths use). Extend here if asset names gain other characters.
+' Percent-encode a repo path for the GitHub URL. Preserves "/" and the RFC 3986
+' unreserved set; encodes everything else (spaces, &, +, parentheses, ...).
+' Assumes ASCII asset names (true for this project).
 Private Function UrlEncodePath(ByVal p As String) As String
-    UrlEncodePath = Replace(p, " ", "%20")
+    Dim i As Long, ch As String, out As String
+    For i = 1 To Len(p)
+        ch = Mid(p, i, 1)
+        If ch Like "[A-Za-z0-9]" Or ch = "-" Or ch = "_" Or ch = "." Or ch = "~" Or ch = "/" Then
+            out = out & ch
+        Else
+            out = out & "%" & Right("0" & Hex(Asc(ch)), 2)
+        End If
+    Next i
+    UrlEncodePath = out
 End Function
 
 ' ============================================================================
