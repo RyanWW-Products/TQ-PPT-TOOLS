@@ -20,6 +20,12 @@ $Repo    = 'TQ-PPT-TOOLS'
 $Branch  = 'main'
 $RegPath = 'HKCU:\Software\TrialQuest\Addin'
 
+# Copy the token AFTER the script is running, so launching it (even by pasting a
+# command) can't clobber the clipboard before we read it.
+Write-Host ''
+Write-Host 'STEP: switch to your browser and click the copy icon next to your token.' -ForegroundColor Cyan
+Read-Host 'Then come back here and press Enter to read it from the clipboard' | Out-Null
+
 # Pull the token from the clipboard and remove ALL whitespace (spaces, tabs,
 # CR/LF) -- GitHub PATs contain none, so this safely kills paste artifacts.
 $raw = Get-Clipboard -Raw
