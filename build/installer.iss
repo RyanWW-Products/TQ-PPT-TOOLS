@@ -17,8 +17,8 @@
 #define MyAppVersion "5.4.3"
 #define MyPublisher  "Trial Quest"
 #define MyAddinFile  "TrialQuest.ppam"
-#define GhOwner      "YOUR_GITHUB_USER_OR_ORG"
-#define GhRepo       "tq-ppt-addin"
+#define GhOwner      "RyanWW-Products"
+#define GhRepo       "TQ-PPT-TOOLS"
 #define GhBranch     "main"
 
 [Setup]

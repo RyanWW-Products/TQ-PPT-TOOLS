@@ -23,8 +23,8 @@ Option Explicit
 '
 ' SET THESE THREE BEFORE BUILDING (and keep ADDIN_VERSION == version.json):
 Public Const ADDIN_VERSION As String = "5.4.3"
-Private Const GH_OWNER     As String = "YOUR_GITHUB_USER_OR_ORG"
-Private Const GH_REPO      As String = "tq-ppt-addin"
+Private Const GH_OWNER     As String = "RyanWW-Products"
+Private Const GH_REPO      As String = "TQ-PPT-TOOLS"
 Private Const GH_BRANCH    As String = "main"
 ' ============================================================================
 
