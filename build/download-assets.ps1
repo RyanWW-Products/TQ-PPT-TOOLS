@@ -45,8 +45,13 @@ try {
         $enc = ($path -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
         "https://api.github.com/repos/$Owner/$Repo/contents/$enc`?ref=$Branch"
     }
+    function Get-RawText([string]$url) {
+        # The raw Accept header makes Invoke-WebRequest return bytes; decode to text.
+        $r = Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing
+        if ($r.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($r.Content) } else { $r.Content }
+    }
 
-    $manifest = (Invoke-WebRequest -Uri (Get-ContentsUrl 'manifest.json') -Headers $headers -UseBasicParsing).Content | ConvertFrom-Json
+    $manifest = (Get-RawText (Get-ContentsUrl 'manifest.json')) | ConvertFrom-Json
 
     $count = 0
     foreach ($f in $manifest.files) {

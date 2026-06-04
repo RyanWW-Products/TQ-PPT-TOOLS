@@ -51,8 +51,9 @@ $headers = @{
 
 Write-Host "Testing token against $Owner/$Repo ..." -ForegroundColor Cyan
 try {
-    $vj = (Invoke-WebRequest "https://api.github.com/repos/$Owner/$Repo/contents/version.json?ref=$Branch" `
-            -Headers $headers -UseBasicParsing).Content
+    $resp = Invoke-WebRequest "https://api.github.com/repos/$Owner/$Repo/contents/version.json?ref=$Branch" `
+            -Headers $headers -UseBasicParsing
+    $vj = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { $resp.Content }
     Write-Host 'SUCCESS - the repo returned:' -ForegroundColor Green
     Write-Host $vj
 }
