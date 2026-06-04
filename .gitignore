@@ -1,0 +1,25 @@
+# Local AppData backup of third-party add-ins (not part of this project)
+_AppdataBackup/
+
+# Installer binaries and Inno Setup build output
+*.exe
+build/Output/
+
+# Large design sources (kept out of the distribution repo)
+Logos/*.psd
+Logos/*.psb
+Logos/*.ppam
+
+# Transient build INPUT: the .ppam you Save-As from the .pptm before build.ps1.
+# The distributable add-in is committed as dist/TrialQuest.ppam instead.
+/*.ppam
+
+# Update staging that may appear if you test the swapper locally
+**/_staging/
+
+# Redundant loose copy at root (canonical copy lives under assets/)
+/CalendarTemplate.pptx
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store

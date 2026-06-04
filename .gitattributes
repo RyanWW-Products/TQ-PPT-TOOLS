@@ -1,0 +1,20 @@
+# Office documents, add-ins, form resources and images are binary.
+# Never EOL-normalize these: the Update button checks asset byte sizes against
+# manifest.json, and the distributable .ppam must stay byte-for-byte identical.
+*.ppam binary
+*.ppt  binary
+*.pptm binary
+*.pptx binary
+*.frx  binary
+*.png  binary
+*.ico  binary
+*.psd  binary
+*.psb  binary
+
+# Text sources: normalize line endings in the repo.
+*.ps1  text eol=lf
+*.iss  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.bas  text
+*.frm  text

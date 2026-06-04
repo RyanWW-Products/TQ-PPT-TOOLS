@@ -1,0 +1,50 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui"> 
+   <ribbon> 
+     <tabs> 
+       <tab id="CustomTab" label="Trial Quest"> 
+         <group id="SampleGroup" label="Macros"> 
+           <button id="Button" label="Auto Callout" size="large" onAction="CalloutAnimation" image="CalloutLogo"/> 
+           <button id="Button2" label="Mighty Morpher" size="large" onAction="MightyMorpher" image="MM-logo"/>
+           <button id="Button5" label="Custom Slides from Hidden" size="large" onAction="CustomFromHidden" image="CustomfromHidden"/>
+           <button id="Button6" label="Spaced Out" size="large" onAction="SpacedOut" image="SpacedOut"/>
+           <button id="Button7" label="Spaced Out - Remove" size="large" onAction="SpacedOutRemover" image="SpacedIn"/>
+           <button id="Button8" label="Toggle Gradient" size="large" onAction="ToggleGradientFill" image="GradientToggle"/>
+           <button id="Button9" label="Bulk Rename" size="large" onAction="BulkRenameSelectedObjects" image="BulkRename"/>
+         </group > 
+          <group id="SampleGroup2" label="Calendar"> 
+           <button id="ButtonB1" label="Make Calendar" size="large" onAction="CalendarGenerator" image="Calendar"/> 
+           <button id="ButtonB2" label="Add Entries" size="large" onAction="AddEntry" image="CalendarEntry"/>
+           <button id="ButtonB3" label="Toggle Edit" size="large" onAction="ToggleTableLayer" image="CalendarEdit"/>
+         </group > 
+           <group id="SampleGroupC" label="Timeline"> 
+           <button id="ButtonC1" label="Make Timeline" size="large" onAction="CreateTimeline" image="Timeline"/> 
+           <button id="ButtonC2" label="Make Entry" size="large" onAction="EntryGenerator" image="EntryMaker"/>
+           <button id="ButtonC3" label="Snap Entry Lines" size="large" onAction="SnapLeadingLines" image="EntrySnap"/>
+           <button id="ButtonC4" label="Table to Object" size="normal" onAction="ConvertSelectedTableToTextBoxes" image="TimelineUnlock"/> 
+           <button id="ButtonC5" label="Swap Time Format" size="normal" onAction="SwapTimeFormats" image="TimeSwap"/>
+           <button id="ButtonC6" label="Swap Month Format" size="normal" onAction="SwapMonthFormats" image="MonthSwap"/>
+           <button id="ButtonC7" label="Day Suffix Toggle" size="normal" onAction="ToggleDaySuffixes" image="DaySuffix"/>
+         </group > 
+         <group id="SampleGroupD" label="Quick Graphics"> 
+           <button id="ButtonD1" label="Open Graphics Importer" size="large" onAction="OpenGraphicsImporter" image="QuickGraphics"/> 
+         </group > 
+         <group id="SampleGroupE" label="Bulk Replace"> 
+           <button id="ButtonE1" label="Assign Shapes to Replace" size="large" onAction="StoreOriginalShapes" image="BulkReplace"/> 
+           <button id="ButtonE2" label="Replace with Selected" size="normal" onAction="ReplaceStoredShapes" image="BulkReplace"/> 
+         </group > 
+         <group id="SampleGroupF" label="Paragraph Styles "> 
+           <button id="ButtonF1" label="Define Style" size="large" onAction="DefineStyleCombined" image="StylesDefine"/> 
+           <button id="ButtonF2" label="Assign Style" size="large" onAction="AssignToGroupStyleCombined" image="StylesAssign"/> 
+           <button id="ButtonF3" label="Update Style" size="large" onAction="UpdateAllGroupStylesCombined" image="StylesUpdate"/> 
+         </group > 
+         <group id="SampleGroupG" label="Vitals">
+           <button id="ButtonG1" label="Vitals Manager" size="large" onAction="ManageScatterplots" image="Vitals"/>
+         </group >
+         <group id="GroupAddin" label="Add-in">
+           <button id="ButtonUpdate" label="Check for Updates" size="large" onAction="CheckForUpdates" imageMso="RefreshAll" screentip="Check for Updates" supertip="Check GitHub for a newer version of the Trial Quest add-in and its template assets, then install it."/>
+           <button id="ButtonAbout" label="About" size="large" onAction="ShowAbout" imageMso="Info" screentip="About Trial Quest" supertip="Show the installed add-in version and update settings."/>
+         </group >
+       </tab>
+     </tabs> 
+   </ribbon> 
+ </customUI>
