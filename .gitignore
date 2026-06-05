@@ -14,6 +14,10 @@ Logos/*.ppam
 # The distributable add-in is committed as dist/TrialQuest.ppam instead.
 /*.ppam
 
+# Working PowerPoint macro files (you version-name them). The git-tracked source
+# is the exported Modules/*.bas + Forms/*; rebuild the .ppam from your local .pptm.
+*.pptm
+
 # Update staging that may appear if you test the swapper locally
 **/_staging/
 
