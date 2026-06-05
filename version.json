@@ -1,5 +1,5 @@
 {
-  "addinVersion": "5.4.6",
+  "addinVersion": "5.4.7",
   "assetsVersion": 1,
-  "notes": "Registry-based versioning; first self-update release."
+  "notes": "Beta channel."
 }
