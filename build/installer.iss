@@ -14,7 +14,7 @@
 ; ============================================================================
 
 #define MyAppName    "Trial Quest PowerPoint Add-in"
-#define MyAppVersion "5.4.3"
+#define MyAppVersion "5.4.6"
 #define MyPublisher  "Trial Quest"
 #define MyAddinFile  "TrialQuest.ppam"
 #define GhOwner      "RyanWW-Products"
@@ -46,6 +46,7 @@ Source: "download-assets.ps1";   DestDir: "{tmp}"; Flags: deleteafterinstall
 [Registry]
 ; --- Update settings consumed by both the installer and the add-in ----------
 Root: HKCU; Subkey: "Software\TrialQuest\Addin"; ValueType: string; ValueName: "GitHubToken"; ValueData: "{code:GetTokenInput}"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\TrialQuest\Addin"; ValueType: string; ValueName: "InstalledVersion"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\TrialQuest";       Flags: uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\TrialQuest\Addin"; Flags: uninsdeletekeyifempty
 

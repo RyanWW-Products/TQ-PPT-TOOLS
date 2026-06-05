@@ -20,9 +20,12 @@ Option Explicit
 '     tiny PowerShell "swapper" copies it into place after PowerPoint closes,
 '     then relaunches PowerPoint. No PowerPoint re-registration is needed because
 '     the installed file name never changes.
+'   * The installed version is NOT baked into this code. It lives in the registry
+'     (InstalledVersion), written by the installer on first install and by the
+'     swapper after each update. So a version bump is just version.json + push --
+'     no editing a constant and no re-importing this module.
 '
-' SET THESE THREE BEFORE BUILDING (and keep ADDIN_VERSION == version.json):
-Public Const ADDIN_VERSION As String = "5.4.3"
+' SET THESE THREE BEFORE BUILDING (must match installer.iss + version.json repo):
 Private Const GH_OWNER     As String = "RyanWW-Products"
 Private Const GH_REPO      As String = "TQ-PPT-TOOLS"
 Private Const GH_BRANCH    As String = "main"
@@ -37,6 +40,7 @@ Private Const STAGING_SUBDIR As String = "TrialQuestUpdate\" ' under %TEMP% (NOT
 Private Const REG_ROOT As String = "HKEY_CURRENT_USER\Software\TrialQuest\Addin\"
 Private Const REG_TOKEN  As String = "GitHubToken"
 Private Const REG_ASSETS As String = "AssetsVersion"
+Private Const REG_INSTALLED As String = "InstalledVersion"
 Private Const REG_AUTOCHK As String = "AutoCheck"
 
 ' ============================================================================
@@ -51,7 +55,7 @@ Public Sub ShowAbout(control As IRibbonControl)
     Dim tok As String, msg As String
     tok = GetToken()
     msg = "Trial Quest PowerPoint Add-in" & vbCrLf & String(34, "-") & vbCrLf & _
-          "Installed version : " & ADDIN_VERSION & vbCrLf & _
+          "Installed version : " & InstalledVersion() & vbCrLf & _
           "Assets version    : " & RegGet(REG_ASSETS, "0") & vbCrLf & _
           "Update source     : " & GH_OWNER & "/" & GH_REPO & " (" & GH_BRANCH & ")" & vbCrLf & _
           "Update token      : " & IIf(tok = "", "NOT configured", "configured") & vbCrLf & _
@@ -102,19 +106,19 @@ Private Sub DoUpdateCheck(ByVal interactive As Boolean)
     latestAssets = JsonNum(vj, "assetsVersion")
     localAssets = CLng(Val(RegGet(REG_ASSETS, "0")))
 
-    needAddin = (CompareVersions(latestVer, ADDIN_VERSION) > 0)
+    needAddin = (CompareVersions(latestVer, InstalledVersion()) > 0)
     needAssets = (latestAssets > localAssets)
 
     If Not needAddin And Not needAssets Then
         If interactive Then MsgBox "You are up to date." & vbCrLf & vbCrLf & _
-                                   "Add-in version: " & ADDIN_VERSION & vbCrLf & _
+                                   "Add-in version: " & InstalledVersion() & vbCrLf & _
                                    "Assets version: " & localAssets, vbInformation, "Check for Updates"
         Exit Sub
     End If
 
     Dim prompt As String
     prompt = "An update is available:" & vbCrLf & vbCrLf
-    If needAddin Then prompt = prompt & "  - Add-in:  " & ADDIN_VERSION & "  ->  " & latestVer & vbCrLf
+    If needAddin Then prompt = prompt & "  - Add-in:  " & InstalledVersion() & "  ->  " & latestVer & vbCrLf
     If needAssets Then prompt = prompt & "  - Assets:  v" & localAssets & "  ->  v" & latestAssets & vbCrLf
     prompt = prompt & vbCrLf & "Download and install now?"
     If MsgBox(prompt, vbQuestion + vbYesNo, "Check for Updates") <> vbYes Then Exit Sub
@@ -129,7 +133,7 @@ Private Sub DoUpdateCheck(ByVal interactive As Boolean)
 
     ' 2) Add-in (staged; swapped after PowerPoint closes) ----------------------
     If needAddin Then
-        If StageAddinAndSwap(lastErr) Then
+        If StageAddinAndSwap(latestVer, lastErr) Then
             MsgBox "Update downloaded." & vbCrLf & vbCrLf & _
                    "Please SAVE your work and CLOSE all PowerPoint windows." & vbCrLf & _
                    "The new version will install automatically and PowerPoint will reopen.", _
@@ -178,7 +182,7 @@ End Function
 ' ----------------------------------------------------------------------------
 ' Download the new .ppam to a staging folder and launch the swapper.
 ' ----------------------------------------------------------------------------
-Private Function StageAddinAndSwap(ByRef errOut As String) As Boolean
+Private Function StageAddinAndSwap(ByVal newVersion As String, ByRef errOut As String) As Boolean
     Dim staging As String, staged As String, target As String, script As String, pptExe As String
 
     staging = Environ$("TEMP") & "\" & STAGING_SUBDIR
@@ -192,7 +196,7 @@ Private Function StageAddinAndSwap(ByRef errOut As String) As Boolean
     End If
 
     script = staging & "apply_update.ps1"
-    WriteSwapperScript script, staged, target, pptExe
+    WriteSwapperScript script, staged, target, pptExe, newVersion
 
     ' Launch detached & hidden so it survives PowerPoint closing.
     Dim sh As Object
@@ -203,7 +207,7 @@ Private Function StageAddinAndSwap(ByRef errOut As String) As Boolean
 End Function
 
 Private Sub WriteSwapperScript(ByVal scriptPath As String, ByVal staged As String, _
-                               ByVal target As String, ByVal pptExe As String)
+                               ByVal target As String, ByVal pptExe As String, ByVal newVersion As String)
     Dim fso As Object, ts As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
     Set ts = fso.CreateTextFile(scriptPath, True)
@@ -213,9 +217,14 @@ Private Sub WriteSwapperScript(ByVal scriptPath As String, ByVal staged As Strin
     ts.WriteLine "$ppt    = '" & pptExe & "'"
     ts.WriteLine "while (Get-Process POWERPNT -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }"
     ts.WriteLine "Start-Sleep -Seconds 1"
+    ts.WriteLine "$copied = $false"
     ts.WriteLine "for ($i = 0; $i -lt 30; $i++) {"
-    ts.WriteLine "  try { Copy-Item -LiteralPath $staged -Destination $target -Force; break }"
+    ts.WriteLine "  try { Copy-Item -LiteralPath $staged -Destination $target -Force; $copied = $true; break }"
     ts.WriteLine "  catch { Start-Sleep -Seconds 1 }"
+    ts.WriteLine "}"
+    ts.WriteLine "if ($copied) {"
+    ts.WriteLine "  New-Item -Path 'HKCU:\Software\TrialQuest\Addin' -Force | Out-Null"
+    ts.WriteLine "  Set-ItemProperty -Path 'HKCU:\Software\TrialQuest\Addin' -Name 'InstalledVersion' -Value '" & newVersion & "'"
     ts.WriteLine "}"
     ts.WriteLine "Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue"
     ts.WriteLine "if (Test-Path $ppt) { Start-Process -FilePath $ppt } else { Start-Process powerpnt }"
@@ -274,7 +283,7 @@ Private Sub SetCommonHeaders(ByVal http As Object)
     http.setRequestHeader "Authorization", "Bearer " & GetToken()
     http.setRequestHeader "Accept", "application/vnd.github.raw"
     http.setRequestHeader "X-GitHub-Api-Version", "2022-11-28"
-    http.setRequestHeader "User-Agent", "TrialQuest-Addin/" & ADDIN_VERSION
+    http.setRequestHeader "User-Agent", "TrialQuest-Addin/" & InstalledVersion()
 End Sub
 
 Private Function ContentsUrl(ByVal repoPath As String) As String
@@ -370,6 +379,12 @@ End Function
 
 Private Function GetToken() As String
     GetToken = RegGet(REG_TOKEN, "")
+End Function
+
+' The locally installed add-in version. Set by the installer (first install) and
+' by the swapper after each update; defaults low so an update is offered if unset.
+Private Function InstalledVersion() As String
+    InstalledVersion = RegGet(REG_INSTALLED, "0.0.0")
 End Function
 
 Private Sub PromptForToken()

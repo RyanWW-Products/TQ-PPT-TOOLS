@@ -1,5 +1,5 @@
 {
-  "addinVersion": "5.4.3",
+  "addinVersion": "5.4.6",
   "assetsVersion": 1,
-  "notes": "Initial GitHub-distributed release."
+  "notes": "Registry-based versioning; first self-update release."
 }

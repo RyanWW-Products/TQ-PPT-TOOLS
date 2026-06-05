@@ -80,31 +80,33 @@ not compile VBA — so always Save-As your `.ppam` from the current `.pptm` firs
 
 ## Release workflow (each new version)
 
-1. Edit macros in the `.pptm`. If you changed `Updater.bas`, keep it imported.
-2. Bump the version in **both** spots so they match:
-   * `Updater.bas` → `Const ADDIN_VERSION = "5.4.4"`
-   * `installer.iss` → `#define MyAppVersion "5.4.4"`
-3. **Save As** a macro-enabled add-in `.ppam` (e.g. into the repo root).
-4. Build the distributable (injects the ribbon, stamps `version.json`):
+The version is **not** stored in the VBA. It lives in `version.json` (the latest
+available) and in each machine's registry `InstalledVersion` (written by the
+installer and by the updater). So a release is just:
+
+1. Edit macros in the `.pptm`. (Only re-import `Updater.bas` if you changed *it*.)
+2. **Save As** a macro-enabled add-in `.ppam` (e.g. into the repo root).
+3. Build the distributable (injects the ribbon, stamps `version.json`):
    ```powershell
-   .\build\build.ps1 -InputPpam ".\TrialQuest Addin Master v5-4-4.ppam" -Version 5.4.4
+   .\build\build.ps1 -InputPpam ".\TrialQuest Addin Master v5-4-7.ppam" -Version 5.4.7
    ```
-5. If you changed any **template assets**, bump `assetsVersion` in `version.json`,
+4. If you changed any **template assets**, bump `assetsVersion` in `version.json`,
    then regenerate the manifest:
    ```powershell
    .\build\make-manifest.ps1
    ```
-6. Commit and push `dist/TrialQuest.ppam`, `version.json`, `manifest.json`, and any
-   changed `assets/…`. Clients now see the update.
-7. (Only when the installer itself changes) recompile it:
+5. Commit and push `dist/TrialQuest.ppam`, `version.json`, `manifest.json`, and any
+   changed `assets/…`. Clients now see the update via **Check for Updates**.
+6. (Only when the installer itself changes) bump `#define MyAppVersion` in
+   `installer.iss` and recompile it:
    ```powershell
    & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\build\installer.iss
    ```
    Output lands in `build\Output\`.
 
-> Keep `ADDIN_VERSION` (in the built `.ppam`) equal to `addinVersion` in
-> `version.json`, or the Update button will misreport. `build.ps1 -Version` stamps
-> `version.json`; you set `ADDIN_VERSION` by hand before exporting the `.ppam`.
+> No VBA constant to edit and no re-import for a version bump — `build.ps1 -Version`
+> stamps `version.json`, the installer writes the registry version on first install,
+> and the updater writes it after each self-update.
 
 ---
 
