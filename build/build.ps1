@@ -81,65 +81,91 @@ if ($Version) {
     Write-Warning "Make sure Const ADDIN_VERSION = `"$Version`" in Updater.bas matched the .ppam you just exported."
 }
 
-# --- Copy the source package to the output, then patch it in place ----------
-Copy-Item -LiteralPath $InputPpam -Destination $OutputPpam -Force
+# --- Rebuild the package, PRESERVING entry order, and inject the ribbon ------
+# Do NOT use ZipArchive 'Update' mode: it reorders the package (rewritten parts
+# get moved to the end), and PowerPoint's add-in loader rejects the result. We
+# instead copy every input part in its original order -- patching
+# [Content_Types].xml and _rels/.rels in place and replacing any existing ribbon
+# parts -- then append any new ribbon parts at the end (like the RibbonX Editor).
 
-function Set-ZipEntryBytes {
-    param([System.IO.Compression.ZipArchive]$Zip, [string]$EntryName, [byte[]]$Bytes)
-    $existing = $Zip.GetEntry($EntryName)
-    if ($existing) { $existing.Delete() }
-    $entry  = $Zip.CreateEntry($EntryName)
-    $stream = $entry.Open()
-    try { $stream.Write($Bytes, 0, $Bytes.Length) } finally { $stream.Dispose() }
-}
-
-function Get-ZipEntryText {
-    param([System.IO.Compression.ZipArchive]$Zip, [string]$EntryName)
-    $entry = $Zip.GetEntry($EntryName)
-    if (-not $entry) { return $null }
-    $reader = New-Object System.IO.StreamReader($entry.Open())
-    try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
-}
-
-$zip = [System.IO.Compression.ZipFile]::Open($OutputPpam, 'Update')
-try {
-    # 1) customUI.xml + its rels
-    Set-ZipEntryBytes $zip 'customUI/customUI.xml' `
-        ([System.IO.File]::ReadAllBytes((Join-Path $RibbonDir 'customUI.xml')))
-    Set-ZipEntryBytes $zip 'customUI/_rels/customUI.xml.rels' `
-        ([System.IO.File]::ReadAllBytes((Join-Path $RibbonDir 'customUI.xml.rels')))
-
-    # 2) images
-    $imgCount = 0
-    Get-ChildItem -Path $ImagesDir -Filter '*.png' -File | ForEach-Object {
-        Set-ZipEntryBytes $zip ("customUI/images/" + $_.Name) ([System.IO.File]::ReadAllBytes($_.FullName))
-        $imgCount++
+function Convert-FromBytes {
+    param([byte[]]$Bytes)
+    if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        return @{ Text = [System.Text.Encoding]::UTF8.GetString($Bytes, 3, $Bytes.Length - 3); Bom = $true }
     }
-
-    # 3) [Content_Types].xml -> ensure png default exists
-    $ct = Get-ZipEntryText $zip '[Content_Types].xml'
-    if (-not $ct) { throw "[Content_Types].xml missing from package -- is this a valid .ppam?" }
-    if ($ct -notmatch '(?i)Extension="png"') {
-        $ct = $ct -replace '(?i)(<Default\s+Extension="xml"[^>]*/>)', ('$1<Default Extension="png" ContentType="image/png" />')
-        Set-ZipEntryBytes $zip '[Content_Types].xml' ([System.Text.Encoding]::UTF8.GetBytes($ct))
+    return @{ Text = [System.Text.Encoding]::UTF8.GetString($Bytes); Bom = $false }
+}
+function Convert-ToBytes { param([string]$Text, [bool]$Bom)
+    (New-Object System.Text.UTF8Encoding($Bom)).GetBytes($Text)
+}
+function Edit-ContentTypes { param([byte[]]$Bytes)
+    $d = Convert-FromBytes $Bytes
+    if ($d.Text -notmatch '(?i)Extension="png"') {
+        $d.Text = $d.Text -replace '(?i)(<Default\s+Extension="xml"[^>]*/>)', ('$1<Default Extension="png" ContentType="image/png" />')
         Write-Host "Patched [Content_Types].xml (added png default)."
     }
-
-    # 4) _rels/.rels -> ensure the customUI extensibility relationship exists
-    $rels = Get-ZipEntryText $zip '_rels/.rels'
-    if (-not $rels) { throw "_rels/.rels missing from package -- is this a valid .ppam?" }
-    if ($rels -notmatch '(?i)ui/extensibility') {
-        $relXml = '<Relationship Type="http://schemas.microsoft.com/office/2006/relationships/ui/extensibility" Target="/customUI/customUI.xml" Id="rIdTQCustomUI" />'
-        $rels = $rels -replace '(?i)</Relationships>', ($relXml + '</Relationships>')
-        Set-ZipEntryBytes $zip '_rels/.rels' ([System.Text.Encoding]::UTF8.GetBytes($rels))
+    Convert-ToBytes $d.Text $d.Bom
+}
+function Edit-RootRels { param([byte[]]$Bytes)
+    $d = Convert-FromBytes $Bytes
+    if ($d.Text -notmatch '(?i)ui/extensibility') {
+        $rel = '<Relationship Type="http://schemas.microsoft.com/office/2006/relationships/ui/extensibility" Target="/customUI/customUI.xml" Id="rIdTQCustomUI" />'
+        $d.Text = $d.Text -replace '(?i)</Relationships>', ($rel + '</Relationships>')
         Write-Host "Patched _rels/.rels (added customUI relationship)."
     }
+    Convert-ToBytes $d.Text $d.Bom
+}
 
-    Write-Host "Injected ribbon + $imgCount image(s)."
+# Ribbon parts to inject (name -> bytes)
+$ribbon = [ordered]@{}
+$ribbon['customUI/customUI.xml']            = [System.IO.File]::ReadAllBytes((Join-Path $RibbonDir 'customUI.xml'))
+$ribbon['customUI/_rels/customUI.xml.rels'] = [System.IO.File]::ReadAllBytes((Join-Path $RibbonDir 'customUI.xml.rels'))
+Get-ChildItem -Path $ImagesDir -Filter '*.png' -File | ForEach-Object {
+    $ribbon["customUI/images/$($_.Name)"] = [System.IO.File]::ReadAllBytes($_.FullName)
+}
+
+# Read input entries in order; patch content-types/rels, replace existing ribbon parts.
+$inZip   = [System.IO.Compression.ZipFile]::OpenRead($InputPpam)
+$parts   = New-Object System.Collections.ArrayList
+$present = @{}
+foreach ($e in $inZip.Entries) {
+    $ms = New-Object System.IO.MemoryStream
+    $s  = $e.Open(); $s.CopyTo($ms); $s.Dispose()
+    $bytes = $ms.ToArray()
+    $name  = $e.FullName
+    if     ($name -eq '[Content_Types].xml') { $bytes = Edit-ContentTypes $bytes }
+    elseif ($name -eq '_rels/.rels')         { $bytes = Edit-RootRels $bytes }
+    elseif ($ribbon.Contains($name))         { $bytes = $ribbon[$name] }   # replace in place
+    [void]$parts.Add(@{ Name = $name; Bytes = $bytes })
+    $present[$name] = $true
+}
+$inZip.Dispose()
+
+if (-not $present.ContainsKey('[Content_Types].xml')) { throw "[Content_Types].xml missing -- is this a valid .ppam?" }
+if (-not $present.ContainsKey('_rels/.rels'))         { throw "_rels/.rels missing -- is this a valid .ppam?" }
+
+# Append any ribbon parts the input didn't already have (a fresh .ppam has none).
+foreach ($k in $ribbon.Keys) {
+    if (-not $present.ContainsKey($k)) { [void]$parts.Add(@{ Name = $k; Bytes = $ribbon[$k] }) }
+}
+$imgCount = ($ribbon.Keys | Where-Object { $_ -like 'customUI/images/*' }).Count
+
+# Write the output package in this exact order.
+if (Test-Path $OutputPpam) { Remove-Item -LiteralPath $OutputPpam -Force }
+$outStream = [System.IO.File]::Open($OutputPpam, [System.IO.FileMode]::Create)
+$outZip    = New-Object System.IO.Compression.ZipArchive($outStream, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($p in $parts) {
+        $entry = $outZip.CreateEntry($p.Name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $st = $entry.Open()
+        try { $st.Write($p.Bytes, 0, $p.Bytes.Length) } finally { $st.Dispose() }
+    }
 }
 finally {
-    $zip.Dispose()
+    $outZip.Dispose()
+    $outStream.Dispose()
 }
+Write-Host "Injected ribbon + $imgCount image(s)."
 
 Write-Host ""
 Write-Host "BUILD COMPLETE -> $OutputPpam" -ForegroundColor Green
