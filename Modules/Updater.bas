@@ -25,10 +25,13 @@ Option Explicit
 '     swapper after each update. So a version bump is just version.json + push --
 '     no editing a constant and no re-importing this module.
 '
-' SET THESE THREE BEFORE BUILDING (must match installer.iss + version.json repo):
+' SET THESE TWO BEFORE BUILDING (must match installer.iss + the repo):
 Private Const GH_OWNER     As String = "RyanWW-Products"
 Private Const GH_REPO      As String = "TQ-PPT-TOOLS"
-Private Const GH_BRANCH    As String = "main"
+' The branch is chosen by the install CHANNEL (registry "Channel"):
+'   stable -> main branch (live users) ;  beta -> beta branch (you / testers).
+Private Const BRANCH_STABLE As String = "main"
+Private Const BRANCH_BETA   As String = "beta"
 ' ============================================================================
 
 ' --- Fixed install layout (matches the installer) ---------------------------
@@ -41,6 +44,7 @@ Private Const REG_ROOT As String = "HKEY_CURRENT_USER\Software\TrialQuest\Addin\
 Private Const REG_TOKEN  As String = "GitHubToken"
 Private Const REG_ASSETS As String = "AssetsVersion"
 Private Const REG_INSTALLED As String = "InstalledVersion"
+Private Const REG_CHANNEL As String = "Channel"
 Private Const REG_AUTOCHK As String = "AutoCheck"
 
 ' ============================================================================
@@ -57,7 +61,8 @@ Public Sub ShowAbout(control As IRibbonControl)
     msg = "Trial Quest PowerPoint Add-in" & vbCrLf & String(34, "-") & vbCrLf & _
           "Installed version : " & InstalledVersion() & vbCrLf & _
           "Assets version    : " & RegGet(REG_ASSETS, "0") & vbCrLf & _
-          "Update source     : " & GH_OWNER & "/" & GH_REPO & " (" & GH_BRANCH & ")" & vbCrLf & _
+          "Channel           : " & ChannelName() & vbCrLf & _
+          "Update source     : " & GH_OWNER & "/" & GH_REPO & " (" & BranchRef() & ")" & vbCrLf & _
           "Update token      : " & IIf(tok = "", "NOT configured", "configured") & vbCrLf & _
           "Install folder    : " & AddInDir()
     If tok = "" Then
@@ -288,7 +293,15 @@ End Sub
 
 Private Function ContentsUrl(ByVal repoPath As String) As String
     ContentsUrl = "https://api.github.com/repos/" & GH_OWNER & "/" & GH_REPO & _
-                  "/contents/" & UrlEncodePath(repoPath) & "?ref=" & GH_BRANCH
+                  "/contents/" & UrlEncodePath(repoPath) & "?ref=" & BranchRef()
+End Function
+
+' The install channel ("stable" or "beta") and the branch it maps to.
+Private Function ChannelName() As String
+    ChannelName = LCase(RegGet(REG_CHANNEL, "stable"))
+End Function
+Private Function BranchRef() As String
+    If ChannelName() = "beta" Then BranchRef = BRANCH_BETA Else BranchRef = BRANCH_STABLE
 End Function
 
 ' Percent-encode a repo path for the GitHub URL. Preserves "/" and the RFC 3986

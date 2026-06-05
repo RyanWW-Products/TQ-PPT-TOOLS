@@ -110,6 +110,49 @@ installer and by the updater). So a release is just:
 
 ---
 
+## Beta / stable channels
+
+Two release channels live in the **same repo, on two branches**:
+
+| Channel | Branch | Who | Registry `Channel` |
+|---------|--------|-----|--------------------|
+| stable  | `main` | live users      | `stable` (or unset) |
+| beta    | `beta` | you / testers   | `beta` |
+
+The add-in reads `HKCU\Software\TrialQuest\Addin\Channel` and pulls `version.json`
++ `dist/TrialQuest.ppam` from the matching branch. One build serves both channels —
+the channel is just a registry flag, so live users never see beta because their
+machine reads `main`.
+
+### Develop a beta release
+
+```powershell
+git checkout beta
+# edit macros, build.ps1, bump version.json on beta, commit
+git push origin beta
+```
+
+Anyone on the beta channel gets it via **Check for Updates**.
+
+### Promote beta → stable (ship to everyone)
+
+```powershell
+git checkout main
+git merge beta        # brings beta's code + version.json + dist into main
+git push origin main
+```
+
+### Put a machine on a channel
+
+* *Beta installer:* `ISCC.exe /DChannel=beta build\installer.iss` → `…Setup vX.Y.Z beta.exe` (sets `Channel=beta`).
+* *Flip an existing install:* `.\build\set-channel.ps1 beta` (or `stable`), then Check for Updates.
+
+> Channel-switch caveat: if beta is *ahead* of stable, moving a machine from beta
+> back to stable won't "downgrade" it (the stable `version.json` is lower than what's
+> installed), so it simply stops receiving new updates until stable catches up.
+
+---
+
 ## Installing on a client
 
 1. Run `TEI Addin Setup vX.Y.Z.exe`.

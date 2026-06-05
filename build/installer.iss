@@ -19,11 +19,23 @@
 #define MyAddinFile  "TrialQuest.ppam"
 #define GhOwner      "RyanWW-Products"
 #define GhRepo       "TQ-PPT-TOOLS"
-#define GhBranch     "main"
+
+; Channel: "stable" (default) or "beta". Build the BETA installer with:
+;     ISCC.exe /DChannel=beta build\installer.iss
+#ifndef Channel
+  #define Channel "stable"
+#endif
+#if Channel == "stable"
+  #define GhBranch "main"
+  #define ChannelTag ""
+#else
+  #define GhBranch Channel
+  #define ChannelTag " " + Channel
+#endif
 
 [Setup]
 AppId={{B6E3A9F4-2C71-4D88-9A0E-5F2C7D1A4E33}
-AppName={#MyAppName}
+AppName={#MyAppName}{#ChannelTag}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyPublisher}
 ; Per-user install into the PowerPoint add-ins folder (no admin needed).
@@ -33,7 +45,7 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=no
 Uninstallable=yes
-OutputBaseFilename=TEI Addin Setup v{#MyAppVersion}
+OutputBaseFilename=TEI Addin Setup v{#MyAppVersion}{#ChannelTag}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -47,6 +59,7 @@ Source: "download-assets.ps1";   DestDir: "{tmp}"; Flags: deleteafterinstall
 ; --- Update settings consumed by both the installer and the add-in ----------
 Root: HKCU; Subkey: "Software\TrialQuest\Addin"; ValueType: string; ValueName: "GitHubToken"; ValueData: "{code:GetTokenInput}"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\TrialQuest\Addin"; ValueType: string; ValueName: "InstalledVersion"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\TrialQuest\Addin"; ValueType: string; ValueName: "Channel"; ValueData: "{#Channel}"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\TrialQuest";       Flags: uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\TrialQuest\Addin"; Flags: uninsdeletekeyifempty
 

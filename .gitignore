@@ -20,6 +20,9 @@ Logos/*.ppam
 # Redundant loose copy at root (canonical copy lives under assets/)
 /CalendarTemplate.pptx
 
+# Office lock/owner files (created while a doc is open)
+~$*
+
 # OS / editor cruft
 Thumbs.db
 .DS_Store
