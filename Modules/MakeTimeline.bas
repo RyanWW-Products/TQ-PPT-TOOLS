@@ -12,6 +12,7 @@ Sub CreateTimeline(control As IRibbonControl)
     ' Create and show the UserForm
     Dim frm As TimelineSettings
     Set frm = New TimelineSettings
+    frm.Caption = "DateBar Settings"      ' renamed at runtime (no form re-import needed)
     frm.Show
 
     If frm.Tag = "OK" Then
@@ -44,7 +45,7 @@ Sub CreateTimeline(control As IRibbonControl)
             endDate = inputDate("Enter the end date (MM/DD/YYYY):", cancelFlag)
             If cancelFlag Then Exit Sub
 
-            isTwoBar = MsgBox("Do you want a two-bar timeline for days?", vbYesNo) = vbYes
+            isTwoBar = MsgBox("Use a two-bar layout for days?", vbYesNo) = vbYes
 
         Case "Months"
             startDate = InputMonthYear("Enter the start month/year (MM/YYYY):", cancelFlag)
@@ -53,7 +54,7 @@ Sub CreateTimeline(control As IRibbonControl)
             endDate = InputMonthYear("Enter the end month/year (MM/YYYY):", cancelFlag)
             If cancelFlag Then Exit Sub
 
-            isTwoBar = MsgBox("Do you want a two-bar timeline for months?", vbYesNo) = vbYes
+            isTwoBar = MsgBox("Use a two-bar layout for months?", vbYesNo) = vbYes
 
         Case "Years"
             startDate = InputYear("Enter the start year (YYYY):", cancelFlag)
@@ -74,13 +75,13 @@ Sub CreateTimeline(control As IRibbonControl)
         CreateTimelineTable SlideIndex, timelineType, startDate, endDate, timelineColor
     End If
 
-    MsgBox "Timeline creation is complete."
+    MsgBox "DateBar created."
 End Sub
 
 Function IsValidTimelineType(timelineType As String) As Boolean
     IsValidTimelineType = (timelineType = "Hours" Or timelineType = "Days" Or timelineType = "Months" Or timelineType = "Years")
     If Not IsValidTimelineType Then
-        MsgBox "Invalid timeline type. Please enter one of the following: Hours, Days, Months, Years."
+        MsgBox "Invalid date-bar type. Please enter one of the following: Hours, Days, Months, Years."
     End If
 End Function
 Function inputDate(prompt As String, ByRef wasCancelled As Boolean) As Date
