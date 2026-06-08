@@ -22,7 +22,7 @@ Sub CalendarGenerator(control As IRibbonControl)
     Dim pres As PowerPoint.presentation
     Dim tpl As PowerPoint.presentation
     Dim templatePath As String
-    Dim mode As VbMsgBoxResult
+    Dim choice As VbMsgBoxResult
     Dim startDate As Date, endDate As Date
     Dim cancelled As Boolean
     Dim d As Date, cnt As Integer
@@ -35,13 +35,13 @@ Sub CalendarGenerator(control As IRibbonControl)
     Set pres = ppt.ActivePresentation
 
     ' Single calendar, or a range (each month on its own slide)?
-    mode = MsgBox("Create a RANGE of calendars (each month on its own slide)?" & vbCrLf & vbCrLf & _
+    choice = MsgBox("Create a RANGE of calendars (each month on its own slide)?" & vbCrLf & vbCrLf & _
                   "Yes = a range (enter a start and end month)" & vbCrLf & _
                   "No  = a single month", _
                   vbYesNoCancel + vbQuestion, "Calendar Generator")
-    If mode = vbCancel Then Exit Sub
+    If choice = vbCancel Then Exit Sub
 
-    If mode = vbYes Then
+    If choice = vbYes Then
         startDate = PromptMonthYear("Enter the START month and year (MM/YYYY):", cancelled)
         If cancelled Then Exit Sub
         endDate = PromptMonthYear("Enter the END month and year (MM/YYYY):", cancelled)
