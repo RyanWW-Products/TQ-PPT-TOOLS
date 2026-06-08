@@ -360,24 +360,24 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
         If colH > maxH Then maxH = colH
     Next ci
 
-    Dim scale As Single
-    scale = 1
-    If maxH > availH And maxH > 0 Then scale = availH / maxH
-    If scale < MIN_SCALE Then
-        scale = MIN_SCALE
+    Dim sc As Single
+    sc = 1
+    If maxH > availH And maxH > 0 Then sc = availH / maxH
+    If sc < MIN_SCALE Then
+        sc = MIN_SCALE
         overflowMsg = vbCrLf & "NOTE: content exceeds one slide even at minimum size on some columns." & _
                       vbCrLf & "Consider enabling multi-slide split or trimming descriptions."
     End If
-    If scale > 1 Then scale = 1
+    If sc > 1 Then sc = 1
 
     Dim drawn As Long, animSeq As Long
     ' year band (section 5) + each column (section 6)
     For ci = 1 To pn
         Dim colLeft As Single
         colLeft = MARGIN + (ci - 1) * colW
-        DrawYearBox sld, pageYears(ci), colLeft, colW, scale
+        DrawYearBox sld, pageYears(ci), colLeft, colW, sc
         drawn = drawn + DrawColumn(sld, ev, n, pageYears(ci), colLeft, colW, bandCenterY, _
-                                   availH, scale, animate, animSeq)
+                                   availH, sc, animate, animSeq)
     Next ci
 
     ApplyZOrder sld                                 ' section 6.7
@@ -387,30 +387,30 @@ End Function
 ' One year-column: stacked cards + date-accurate leader lines (section 6)
 Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
                             ByVal yr As Integer, ByVal colLeft As Single, ByVal colW As Single, _
-                            ByVal bandCenterY As Single, ByVal availH As Single, ByVal scale As Single, _
+                            ByVal bandCenterY As Single, ByVal availH As Single, ByVal sc As Single, _
                             ByVal animate As Boolean, ByRef animSeq As Long) As Long
     Dim innerL As Single, innerR As Single, boxW As Single
     innerL = colLeft + COL_PAD
     innerR = colLeft + colW - COL_PAD
-    boxW = BOX_WIDTH * scale
+    boxW = BOX_WIDTH * sc
     If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
 
     Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long, lastDate As Double
-    cursorY = BAND_TOP + BAND_HEIGHT + BAND_GAP * scale
+    cursorY = BAND_TOP + BAND_HEIGHT + BAND_GAP * sc
     prevLeft = innerL
     lastDate = -1
 
     For i = 1 To n
         If ev(i).Year = yr Then
             Dim dateX As Single, boxLeft As Single, dH As Single, descH As Single
-            dH = DATE_HEIGHT * scale
-            descH = ev(i).DescH * scale
+            dH = DATE_HEIGHT * sc
+            descH = ev(i).DescH * sc
 
             ' date-accurate leader-line X (section 6.4) -- NOT the box center
             dateX = innerL + ClampD(ev(i).YearFrac, 0, 1) * (innerR - innerL)
 
             ' box left so the line meets it LINE_INSET from its edge; monotonic stagger (6.3)
-            boxLeft = dateX - LINE_INSET * scale
+            boxLeft = dateX - LINE_INSET * sc
             If boxLeft < prevLeft Then boxLeft = prevLeft        ' monotonic
             If boxLeft > innerR - boxW Then boxLeft = innerR - boxW
             If boxLeft < innerL Then boxLeft = innerL
@@ -418,9 +418,9 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
 
             ' the two boxes (section 6.2)
             Dim dateMidY As Single, dShp As Shape, descShp As Shape
-            Set dShp = PlaceDateBox(sld, ev(i).DateLabel, boxLeft, cursorY, boxW, dH, scale)
+            Set dShp = PlaceDateBox(sld, ev(i).DateLabel, boxLeft, cursorY, boxW, dH, sc)
             dateMidY = cursorY + dH / 2
-            Set descShp = PlaceDescBox(sld, ev(i).Desc, boxLeft, cursorY + dH, boxW, descH, scale)
+            Set descShp = PlaceDescBox(sld, ev(i).Desc, boxLeft, cursorY + dH, boxW, descH, sc)
 
             ' leader line: vertical at the date-accurate X, band -> date-box middle (6.5)
             If ev(i).SortKey <> lastDate Then
@@ -433,7 +433,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
                 AddFade sld, descShp, False
                 animSeq = animSeq + 1
             End If
-            cursorY = cursorY + dH + descH + ROW_GAP * scale
+            cursorY = cursorY + dH + descH + ROW_GAP * sc
             drawn = drawn + 1
         End If
     Next i
@@ -441,28 +441,28 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
 End Function
 
 Private Sub DrawYearBox(ByVal sld As slide, ByVal yr As Integer, ByVal colLeft As Single, _
-                        ByVal colW As Single, ByVal scale As Single)
+                        ByVal colW As Single, ByVal sc As Single)
     Dim w As Single, sh As Shape
-    w = MinS(colW - 2 * COL_PAD, 120 * scale)
-    Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLeft + (colW - w) / 2, BAND_TOP, w, BAND_HEIGHT * scale)
-    StyleBox sh, NAVY(), WHITE(), CStr(yr), "Arial", FS_YEAR * scale, True, True
+    w = MinS(colW - 2 * COL_PAD, 120 * sc)
+    Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLeft + (colW - w) / 2, BAND_TOP, w, BAND_HEIGHT * sc)
+    StyleBox sh, NAVY(), WHITE(), CStr(yr), "Arial", FS_YEAR * sc, True, True
     sh.Name = SHAPE_PREFIX & "_Year_" & yr & "_" & sld.SlideIndex
 End Sub
 
 Private Function PlaceDateBox(ByVal sld As slide, ByVal label As String, ByVal x As Single, ByVal y As Single, _
-                              ByVal w As Single, ByVal h As Single, ByVal scale As Single) As Shape
+                              ByVal w As Single, ByVal h As Single, ByVal sc As Single) As Shape
     Dim sh As Shape
     Set sh = sld.Shapes.AddShape(msoShapeRectangle, x, y, w, h)
-    StyleBox sh, NAVY(), WHITE(), label, "Arial", FS_DATE * scale, True, True
+    StyleBox sh, NAVY(), WHITE(), label, "Arial", FS_DATE * sc, True, True
     sh.Name = SHAPE_PREFIX & "_Date_" & sld.Shapes.count
     Set PlaceDateBox = sh
 End Function
 
 Private Function PlaceDescBox(ByVal sld As slide, ByVal text As String, ByVal x As Single, ByVal y As Single, _
-                              ByVal w As Single, ByVal h As Single, ByVal scale As Single) As Shape
+                              ByVal w As Single, ByVal h As Single, ByVal sc As Single) As Shape
     Dim sh As Shape
     Set sh = sld.Shapes.AddShape(msoShapeRectangle, x, y, w, h)
-    StyleBox sh, WHITE(), NAVY(), text, "Arial", FS_DESC * scale, False, False
+    StyleBox sh, WHITE(), NAVY(), text, "Arial", FS_DESC * sc, False, False
     sh.TextFrame.WordWrap = msoTrue
     sh.TextFrame2.VerticalAnchor = msoAnchorTop
     sh.Name = SHAPE_PREFIX & "_Desc_" & sld.Shapes.count
