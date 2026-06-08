@@ -603,7 +603,13 @@ Private Sub ReportSummary(ByVal summary As String, ByVal errLog As String)
 End Sub
 
 Private Function ClampD(ByVal v As Double, ByVal lo As Double, ByVal hi As Double) As Double
-    If v < lo Then ClampD = lo ElseIf v > hi Then ClampD = hi Else ClampD = v
+    If v < lo Then
+        ClampD = lo
+    ElseIf v > hi Then
+        ClampD = hi
+    Else
+        ClampD = v
+    End If
 End Function
 
 Private Function MinS(ByVal a As Single, ByVal b As Single) As Single
