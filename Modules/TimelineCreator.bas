@@ -41,15 +41,8 @@ Private Const MIN_SCALE     As Single = 0.55    ' autofit floor
 
 Private Const BORDER_PT     As Single = 1.5
 
-' Colors (navy 043D66 + white)
-Private Function NAVY() As Long
-    NAVY = RGB(4, 61, 102)
-End Function
-Private Function WHITE() As Long
-    WHITE = RGB(255, 255, 255)
-End Function
-
 ' ---- Event record (section 2) ----------------------------------------------
+' (Module-level Type MUST sit in the declarations section, before any procedure.)
 Private Type TLEvent
     SortKey   As Double      ' constructed date serial, for sorting
     RawDate   As Date
@@ -60,6 +53,14 @@ Private Type TLEvent
     OrigIndex As Long
     DescH     As Single      ' measured description height at base font
 End Type
+
+' Colors (navy 043D66 + white)
+Private Function NAVY() As Long
+    NAVY = RGB(4, 61, 102)
+End Function
+Private Function WHITE() As Long
+    WHITE = RGB(255, 255, 255)
+End Function
 
 ' ============================================================================
 ' ENTRY POINT
