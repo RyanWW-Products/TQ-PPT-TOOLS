@@ -1,8 +1,8 @@
-Attribute VB_Name = "TimelineImporter"
+Attribute VB_Name = "TimelineCreator"
 Option Explicit
 
 ' ============================================================================
-' TIMELINE IMPORTER  -  Excel -> year-banded chronological timeline
+' TIMELINE CREATOR  -  Excel -> year-banded chronological timeline
 ' ============================================================================
 ' Reads a standardized Excel template (Date / Time / Description columns matched
 ' by HEADER TEXT) and draws a year-banded timeline. Every position is computed
@@ -69,7 +69,7 @@ Public Sub BuildTimeline(control As IRibbonControl)
     Dim sld As slide
     Set sld = ActiveTargetSlide()
     If sld Is Nothing Then
-        MsgBox "Open a presentation and select a slide first.", vbExclamation, "Timeline Importer"
+        MsgBox "Open a presentation and select a slide first.", vbExclamation, "Timeline Creator"
         Exit Sub
     End If
 
@@ -78,7 +78,7 @@ Public Sub BuildTimeline(control As IRibbonControl)
     ans = MsgBox("Build a timeline from your Excel data?" & vbCrLf & vbCrLf & _
                  "Yes  = pick your filled-in spreadsheet" & vbCrLf & _
                  "No   = create a blank template to fill in first", _
-                 vbYesNoCancel + vbQuestion, "Timeline Importer")
+                 vbYesNoCancel + vbQuestion, "Timeline Creator")
     If ans = vbCancel Then Exit Sub
     If ans = vbNo Then CreateTimelineTemplate: Exit Sub
 
@@ -90,19 +90,19 @@ Public Sub BuildTimeline(control As IRibbonControl)
     n = ReadEvents(filePath, events, errLog)
     If n = 0 Then
         MsgBox "No usable events were found in that file." & vbCrLf & vbCrLf & errLog, _
-               vbExclamation, "Timeline Importer"
+               vbExclamation, "Timeline Creator"
         Exit Sub
     End If
 
     ' Options
     Dim includeEmpty As Boolean, allowMulti As Boolean, animate As Boolean
     includeEmpty = (MsgBox("Show empty years (gaps with no events) as columns too?", _
-                    vbYesNo + vbQuestion, "Timeline Importer") = vbYes)
+                    vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
     allowMulti = (MsgBox("If it won't fit on one slide, split it across multiple slides?" & vbCrLf & vbCrLf & _
                     "Yes = split across slides" & vbCrLf & "No = shrink to fit one slide", _
-                    vbYesNo + vbQuestion, "Timeline Importer") = vbYes)
+                    vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
     animate = (MsgBox("Add a fade-in (on click, in chronological order) to each entry?", _
-                    vbYesNo + vbQuestion, "Timeline Importer") = vbYes)
+                    vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
 
     ' Idempotent: clear our prior output
     ClearPriorOutput sld
@@ -113,7 +113,7 @@ Public Sub BuildTimeline(control As IRibbonControl)
     ReportSummary summary, errLog
     Exit Sub
 Fail:
-    MsgBox "Timeline build failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Timeline Importer"
+    MsgBox "Timeline build failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Timeline Creator"
 End Sub
 
 ' ============================================================================
@@ -591,14 +591,14 @@ Private Sub CreateTimelineTemplate()
     On Error GoTo 0
     MsgBox "Blank template saved:" & vbCrLf & vbCrLf & savePath & vbCrLf & vbCrLf & _
            "Fill in the Date and Description columns (Time optional), then run Import Timeline again.", _
-           vbInformation, "Timeline Importer"
+           vbInformation, "Timeline Creator"
 End Sub
 
 Private Sub ReportSummary(ByVal summary As String, ByVal errLog As String)
     Dim msg As String
     msg = summary
     If Len(errLog) > 0 Then msg = msg & vbCrLf & vbCrLf & "Skipped / notes:" & vbCrLf & errLog
-    MsgBox msg, vbInformation, "Timeline Importer"
+    MsgBox msg, vbInformation, "Timeline Creator"
 End Sub
 
 Private Function ClampD(ByVal v As Double, ByVal lo As Double, ByVal hi As Double) As Double

@@ -19,8 +19,8 @@
            <button id="ButtonB3" label="Toggle Edit" size="large" onAction="ToggleTableLayer" image="CalendarEdit"/>
          </group > 
            <group id="SampleGroupC" label="Timeline"> 
-           <button id="ButtonC1" label="Make Timeline" size="large" onAction="CreateTimeline" image="Timeline"/>
-           <button id="ButtonC8" label="Import Timeline" size="large" onAction="BuildTimeline" image="AutoSummary" screentip="Import Timeline from Excel" supertip="Read a timeline spreadsheet (Date / Time / Description) and draw a year-banded chronological timeline. Autofits to one slide or splits across slides."/>
+           <button id="ButtonC1" label="Make DateBar" size="large" onAction="CreateTimeline" image="DateBar" screentip="Make DateBar" supertip="Create a year/month/day date-bar timeline (the banded bar style)."/>
+           <button id="ButtonC8" label="Make Timeline" size="large" onAction="BuildTimeline" image="Timeline" screentip="Make Timeline from Excel" supertip="Read a timeline spreadsheet (Date / Time / Description) and draw a year-banded chronological timeline. Autofits to one slide or splits across slides."/>
            <button id="ButtonC2" label="Make Entry" size="large" onAction="EntryGenerator" image="EntryMaker"/>
            <button id="ButtonC3" label="Snap Entry Lines" size="large" onAction="SnapLeadingLines" image="EntrySnap"/>
            <button id="ButtonC4" label="Table to Object" size="large" onAction="ConvertSelectedTableToTextBoxes" image="TimelineUnlock"/>
