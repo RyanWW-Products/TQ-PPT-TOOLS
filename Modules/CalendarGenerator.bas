@@ -1,4 +1,6 @@
 Attribute VB_Name = "CalendarGenerator"
+Option Explicit
+
 Function IsValidDate(DateString As String) As Boolean
     Dim DateParts As Variant
     If InStr(DateString, "/") > 0 Then
@@ -17,59 +19,114 @@ End Function
 
 Sub CalendarGenerator(control As IRibbonControl)
     Dim ppt As PowerPoint.Application
-    Dim presentation As PowerPoint.presentation
-    Dim slide As PowerPoint.slide
-    Dim calendarTable As PowerPoint.Shape
-    Dim i As Integer
-    Dim startDay As Integer
-    Dim daysInMonth As Integer
-    Dim inputDate As Date
-    Dim inputString As String
+    Dim pres As PowerPoint.presentation
+    Dim tpl As PowerPoint.presentation
     Dim templatePath As String
+    Dim mode As VbMsgBoxResult
+    Dim startDate As Date, endDate As Date
+    Dim cancelled As Boolean
+    Dim d As Date, cnt As Integer
 
-    templatePath = Environ("APPDATA") & "\Microsoft\AddIns\Trial Ex Addin\CalendarTemplate.pptx"
-    
-    ' Get the PowerPoint application, presentation, and slide
     Set ppt = PowerPoint.Application
-    Set presentation = ppt.ActivePresentation
-    Set slide = presentation.Slides.Add(presentation.Slides.count + 1, ppLayoutBlank)
-    
-    ' Prompt the user for the month and year
+    If ppt.Presentations.count = 0 Then
+        MsgBox "Please open a presentation first.", vbExclamation, "Calendar Generator"
+        Exit Sub
+    End If
+    Set pres = ppt.ActivePresentation
+
+    ' Single calendar, or a range (each month on its own slide)?
+    mode = MsgBox("Create a RANGE of calendars (each month on its own slide)?" & vbCrLf & vbCrLf & _
+                  "Yes = a range (enter a start and end month)" & vbCrLf & _
+                  "No  = a single month", _
+                  vbYesNoCancel + vbQuestion, "Calendar Generator")
+    If mode = vbCancel Then Exit Sub
+
+    If mode = vbYes Then
+        startDate = PromptMonthYear("Enter the START month and year (MM/YYYY):", cancelled)
+        If cancelled Then Exit Sub
+        endDate = PromptMonthYear("Enter the END month and year (MM/YYYY):", cancelled)
+        If cancelled Then Exit Sub
+        If endDate < startDate Then        ' tolerate reversed entry
+            Dim tmp As Date
+            tmp = startDate: startDate = endDate: endDate = tmp
+        End If
+        Dim nMonths As Integer
+        nMonths = DateDiff("m", startDate, endDate) + 1
+        If MsgBox("This will create " & nMonths & " calendars, each on its own slide." & vbCrLf & _
+                  "Continue?", vbYesNo + vbQuestion, "Calendar Generator") <> vbYes Then Exit Sub
+    Else
+        startDate = PromptMonthYear("Please enter the month and year (MM/YYYY):", cancelled)
+        If cancelled Then Exit Sub
+        endDate = startDate
+    End If
+
+    ' Open the template ONCE for the whole run
+    templatePath = Environ("APPDATA") & "\Microsoft\AddIns\Trial Ex Addin\CalendarTemplate.pptx"
+    If Dir(templatePath) = "" Then
+        MsgBox "Calendar template not found:" & vbCrLf & vbCrLf & templatePath, vbExclamation, "Calendar Generator"
+        Exit Sub
+    End If
+
+    On Error GoTo CleanFail
+    Set tpl = ppt.Presentations.Open(templatePath, WithWindow:=msoFalse)
+
+    d = startDate
+    Do While d <= endDate
+        CreateCalendarSlide pres, tpl, d
+        cnt = cnt + 1
+        d = DateAdd("m", 1, d)
+    Loop
+
+    tpl.Close
+    Set tpl = Nothing
+    If cnt > 1 Then MsgBox cnt & " calendars created.", vbInformation, "Calendar Generator"
+    Exit Sub
+CleanFail:
+    On Error Resume Next
+    If Not tpl Is Nothing Then tpl.Close
+    MsgBox "Calendar creation failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Calendar Generator"
+End Sub
+
+' Prompt for MM/YYYY; returns the 1st of that month. Sets cancelled=True if the
+' user cancels the InputBox.
+Private Function PromptMonthYear(prompt As String, ByRef cancelled As Boolean) As Date
+    Dim s As String
+    cancelled = False
     Do
-        inputString = InputBox("Please enter the month and year (MM/YYYY):", "Input Date")
-        If IsValidDate(inputString) Then Exit Do
+        s = InputBox(prompt, "Input Date")
+        If s = "" Then cancelled = True: Exit Function
+        If IsValidDate(s) Then
+            PromptMonthYear = DateSerial(CInt(Right(s, 4)), CInt(Left(s, 2)), 1)
+            Exit Function
+        End If
         MsgBox "Invalid date. Please enter the date in the format MM/YYYY.", vbOKOnly + vbExclamation, "Invalid Input"
     Loop
-    
-    inputDate = DateSerial(Right(inputString, 4), Left(inputString, 2), 1)
-    
-    ' Open the template presentation and copy the table
-    Dim templatePresentation As PowerPoint.presentation
-    Set templatePresentation = ppt.Presentations.Open(templatePath, WithWindow:=msoFalse)
-    templatePresentation.Slides(1).Shapes(1).Copy
-    templatePresentation.Close
-    
-' Paste the table to the new slide
-slide.Shapes.Paste
-Set calendarTable = slide.Shapes(slide.Shapes.count)
-calendarTable.Name = "CalendarTable"
-    
-    ' Get the start day of the week and the total number of days in the month
-    startDay = Weekday(inputDate, vbSunday)
-    daysInMonth = day(DateAdd("m", 1, inputDate) - 1)
-    
-    ' Check if the 6th row is needed, and if so, add it
-    If daysInMonth + startDay - 1 > 36 Then
-        calendarTable.Table.Rows.Add
-    End If
-    
-    ' Set the calendar days
+End Function
+
+' Build one calendar slide for the given month, copying the table from the
+' already-open template.
+Private Sub CreateCalendarSlide(pres As PowerPoint.presentation, tpl As PowerPoint.presentation, monthDate As Date)
+    Dim slide As PowerPoint.slide
+    Dim calendarTable As PowerPoint.Shape
+    Dim startDay As Integer, daysInMonth As Integer, i As Integer
+    Dim row As Integer, column As Integer
+
+    Set slide = pres.Slides.Add(pres.Slides.count + 1, ppLayoutBlank)
+
+    tpl.Slides(1).Shapes(1).Copy
+    slide.Shapes.Paste
+    Set calendarTable = slide.Shapes(slide.Shapes.count)
+    calendarTable.Name = "CalendarTable"
+
+    startDay = Weekday(monthDate, vbSunday)
+    daysInMonth = day(DateAdd("m", 1, monthDate) - 1)
+
+    ' Add the 6th row only when the month needs it
+    If daysInMonth + startDay - 1 > 36 Then calendarTable.Table.Rows.Add
+
     For i = 1 To daysInMonth
-        Dim row As Integer
-        Dim column As Integer
         row = ((startDay - 2 + i) \ 7) + 1
         column = ((startDay - 2 + i) Mod 7) + 1
-
         With calendarTable.Table.cell(row, column).Shape.TextFrame.TextRange
             .text = i
             .ParagraphFormat.Alignment = ppAlignLeft
@@ -79,9 +136,8 @@ calendarTable.Name = "CalendarTable"
         End With
     Next i
 
-    ' Add date as a custom property to the slide
-    AddCustomProperty slide, "CalendarMonth", Left(inputString, 2)
-    AddCustomProperty slide, "CalendarYear", Right(inputString, 4)
+    AddCustomProperty slide, "CalendarMonth", CStr(month(monthDate))
+    AddCustomProperty slide, "CalendarYear", CStr(year(monthDate))
 End Sub
 
 Sub AddCustomProperty(slide As PowerPoint.slide, propName As String, propValue As String)
@@ -95,7 +151,3 @@ Function GetCustomProperty(slide As PowerPoint.slide, propName As String) As Str
     GetCustomProperty = slide.Tags(propName)
     On Error GoTo 0
 End Function
-
-
-
-
