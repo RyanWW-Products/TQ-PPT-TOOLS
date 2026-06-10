@@ -504,6 +504,14 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
         cellNames(ci) = sh.Name
     Next ci
 
+    ' Tear cells adjacent to a gap (compact mode only; contiguous has no gaps).
+    For ci = 1 To pn - 1
+        If DateAdd(IntervalCode(t), 1, pageCols(ci)) <> pageCols(ci + 1) Then
+            ApplyTear sld, cellNames(ci), True, ci * colW, sc       ' TearA: right edge of left cell
+            ApplyTear sld, cellNames(ci + 1), False, ci * colW, sc  ' TearB: left edge of right cell
+        End If
+    Next ci
+
     Dim grp As Shape
     If pn = 1 Then
         Set grp = sld.Shapes(cellNames(1))
@@ -559,6 +567,54 @@ Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As 
     End With
     On Error GoTo 0
 End Sub
+
+' Subtract the tear freeform from a cell's edge (cell stays primary -> keeps fill + text).
+Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal isTearA As Boolean, _
+                      ByVal boundaryX As Single, ByVal sc As Single)
+    Dim tear As Shape
+    On Error GoTo Bail
+    Set tear = BuildTear(sld, isTearA, boundaryX, sc)
+    tear.Name = "TLTear_tmp"
+    sld.Shapes.Range(Array(cellName, "TLTear_tmp")).MergeShapes msoMergeSubtract, sld.Shapes(cellName)
+    Exit Sub
+Bail:
+    On Error Resume Next
+    If Not tear Is Nothing Then tear.Delete       ' a failed tear must not abort the build
+End Sub
+
+' Recreate the user's tear freeform (TearA right-edge / TearB left-edge) at the cell
+' boundary, scaled. Node coords are normalized 0..1 of the shape box; offsets/sizes
+' come from the supplied Tear Example.pptx (authored for a 30pt-tall cell).
+Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
+                           ByVal boundaryX As Single, ByVal sc As Single) As Shape
+    Dim ff As FreeformBuilder, L As Single, T As Single, w As Single, h As Single
+    If isTearA Then
+        w = 29.7 * sc: h = 60.9 * sc
+        L = boundaryX - 11.6 * sc: T = BAND_TOP - 15.2 * sc
+        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5252 * w, T)
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.6046 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6779 * w, T + 0.6046 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.3536 * w, T + 0.5616 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1765 * w, T + 0.5616 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.3432 * w, T + 0.3569 * h, _
+                    L + 0.3585 * w, T + 0.2046 * h, L + 0.5252 * w, T
+    Else
+        w = 27.7 * sc: h = 60.2 * sc
+        L = boundaryX - 18.1 * sc: T = BAND_TOP - 9 * sc
+        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5644 * w, T)
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.5997 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6539 * w, T + 0.5997 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.2919 * w, T + 0.5935 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1152 * w, T + 0.5904 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2943 * w, T + 0.3832 * h, _
+                    L + 0.3853 * w, T + 0.2072 * h, L + 0.5644 * w, T
+    End If
+    Set BuildTear = ff.ConvertToShape
+End Function
 
 ' One unit-column of stacked entries with date-accurate leader lines.
 Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
