@@ -2,59 +2,57 @@ Attribute VB_Name = "TimelineCreator"
 Option Explicit
 
 ' ============================================================================
-' TIMELINE CREATOR  -  Excel -> year-banded chronological timeline
+' TIMELINE CREATOR  -  Excel -> DateBar-style chronological timeline
 ' ============================================================================
 ' Reads a standardized Excel template (Date / Time / Description columns matched
-' by HEADER TEXT) and draws a year-banded timeline. Every position is computed
-' at runtime; only the style values below are hardcoded (spec section 3).
+' by HEADER TEXT) and draws a timeline of the chosen unit (Years / Months / Days
+' / Hours), reusing the DateBar look:
+'   * The band is a gray/green gradient bar grouped + named "BottomBar".
+'   * Each event is a Make-Entry-style entry (navy date box + white entry box,
+'     GroupStyle-tagged, drop-shadowed) with a date-accurate LeadingLine.
 '
-' Fit behaviour:
-'   * Autofit  -> shrink fonts/metrics so everything fits on ONE slide.
-'   * Multi    -> split year-columns across multiple slides when asked.
-'   * If even the minimum scale can't fit, it REPORTS (never clips).
+' Gaps:  OFF -> contiguous bar (every unit first..last);  ON -> compact (only
+'        units that have entries).  Unit count is capped at MAX_COLS.
+' Fit:   autofit shrinks to one slide; optional multi-slide split by columns.
+' Idempotent: re-running clears prior "EventCard*" shapes + the "BottomBar".
 '
-' Idempotent: re-running deletes prior "EventCard*" shapes on the slide and any
-' extra slides this tool created (tagged), then redraws -- no data loss.
-'
-' Entry point (ribbon button "Import Timeline"):  BuildTimeline
+' NOTE: two-bar (Days->months / Months->years top row) is a follow-up pass.
+' Entry point (ribbon "Make Timeline"):  BuildTimeline
 ' ============================================================================
 
-' ---- Style constants (section 3 -- the ONLY hardcoded layout values) -------
 Private Const SHAPE_PREFIX  As String = "EventCard"
 Private Const SLIDE_TAG     As String = "TLIMPORTER"
 
-Private Const MARGIN        As Single = 36      ' slide edge margin (pt)
-Private Const BAND_TOP      As Single = 72      ' top of the year band
-Private Const BAND_HEIGHT   As Single = 30      ' year band height
-Private Const BAND_GAP      As Single = 24      ' gap below band before first card
+Private Const MARGIN        As Single = 36
+Private Const BAND_TOP      As Single = 72
+Private Const BAND_HEIGHT   As Single = 30
+Private Const BAND_GAP      As Single = 24
 Private Const BOX_WIDTH     As Single = 168
 Private Const DATE_HEIGHT   As Single = 21
 Private Const ROW_GAP       As Single = 22
-Private Const LINE_INSET    As Single = 18      ' where the leader line meets the box
-Private Const COL_PAD       As Single = 8       ' inner padding each side of a column
-Private Const MIN_COL_W     As Single = 132     ' below this, split years across slides
+Private Const LINE_INSET    As Single = 18
+Private Const COL_PAD       As Single = 8
+Private Const MIN_COL_W     As Single = 132
 
-Private Const FS_DATE       As Single = 12      ' Arial 12 bold  (date box)
-Private Const FS_DESC       As Single = 10      ' Arial 10       (description)
-Private Const FS_YEAR       As Single = 14      ' Arial 14 bold  (year band)
-Private Const MIN_SCALE     As Single = 0.55    ' autofit floor
-
+Private Const FS_DATE       As Single = 12
+Private Const FS_DESC       As Single = 10
+Private Const FS_LABEL      As Single = 14
+Private Const MIN_SCALE     As Single = 0.55
 Private Const BORDER_PT     As Single = 1.5
+Private Const MAX_COLS      As Long = 75        ' PowerPoint table / practical column ceiling
 
-' ---- Event record (section 2) ----------------------------------------------
-' (Module-level Type MUST sit in the declarations section, before any procedure.)
+' ---- Event record (Type MUST sit before any procedure) ---------------------
 Private Type TLEvent
-    SortKey   As Double      ' constructed date serial, for sorting
+    SortKey   As Double
     RawDate   As Date
-    Year      As Integer
-    YearFrac  As Double      ' (DayOfYear-1)/(DaysInYear-1); leader-line X only
     DateLabel As String
     Desc      As String
     OrigIndex As Long
-    DescH     As Single      ' measured description height at base font
+    DescH     As Single
+    UnitStart As Date        ' the date truncated to the chosen unit (column key)
+    UnitFrac  As Double       ' position within the unit, 0..1 (leader-line X)
 End Type
 
-' Colors (navy 043D66 + white)
 Private Function NAVY() As Long
     NAVY = RGB(4, 61, 102)
 End Function
@@ -74,7 +72,6 @@ Public Sub BuildTimeline(control As IRibbonControl)
         Exit Sub
     End If
 
-    ' Offer template creation up front
     Dim ans As VbMsgBoxResult
     ans = MsgBox("Build a timeline from your Excel data?" & vbCrLf & vbCrLf & _
                  "Yes  = pick your filled-in spreadsheet" & vbCrLf & _
@@ -95,22 +92,48 @@ Public Sub BuildTimeline(control As IRibbonControl)
         Exit Sub
     End If
 
-    ' Options
-    Dim includeEmpty As Boolean, allowMulti As Boolean, animate As Boolean
-    includeEmpty = (MsgBox("Show empty years (gaps with no events) as columns too?", _
-                    vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
-    allowMulti = (MsgBox("If it won't fit on one slide, split it across multiple slides?" & vbCrLf & vbCrLf & _
-                    "Yes = split across slides" & vbCrLf & "No = shrink to fit one slide", _
-                    vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
-    animate = (MsgBox("Add a fade-in (on click, in chronological order) to each entry?", _
-                    vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
+    ' Timeline unit + bar color (reuse the DateBar settings dialog)
+    Dim timelineType As String, timelineColor As String
+    Dim frm As TimelineSettings
+    Set frm = New TimelineSettings
+    frm.Caption = "Timeline Type"
+    frm.Show
+    If frm.Tag <> "OK" Then Unload frm: Exit Sub
+    timelineType = frm.timelineType
+    timelineColor = frm.timelineColor
+    Unload frm
 
-    ' Idempotent: clear our prior output
+    Dim allowGaps As Boolean, allowMulti As Boolean, doWipe As Boolean
+    allowGaps = (MsgBox("Allow breaks / gaps in the timeline?" & vbCrLf & vbCrLf & _
+                 "Yes = compact (only units that have entries)" & vbCrLf & _
+                 "No  = continuous (every " & LCase$(UnitWord(timelineType)) & " from first to last)", _
+                 vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
+    allowMulti = (MsgBox("If it won't fit on one slide, split it across multiple slides?", _
+                 vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
+    doWipe = (MsgBox("Add a top-to-bottom wipe entrance to each entry (on click)?", _
+                 vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
+
+    ' Assign each event to its unit, and validate the column count
+    Dim i As Long
+    For i = 1 To n
+        events(i).UnitStart = UnitStartOf(events(i).RawDate, timelineType)
+        events(i).UnitFrac = UnitFracOf(events(i).RawDate, timelineType)
+    Next i
+
+    Dim cols() As Date, nCols As Long
+    nCols = ComputeColumns(events, n, timelineType, allowGaps, cols)
+    If nCols > MAX_COLS Then
+        MsgBox "That would need " & nCols & " " & LCase$(UnitWord(timelineType)) & " columns, " & _
+               "above the limit of " & MAX_COLS & "." & vbCrLf & vbCrLf & _
+               "Choose a coarser unit (e.g. Months instead of Days), or turn ON " & _
+               """Allow breaks / gaps"" to compact it.", vbExclamation, "Timeline Creator"
+        Exit Sub
+    End If
+
     ClearPriorOutput sld
 
     Dim summary As String
-    summary = DrawTimeline(sld, events, n, includeEmpty, allowMulti, animate)
-
+    summary = DrawTimeline(sld, events, n, cols, nCols, timelineType, timelineColor, allowMulti, doWipe)
     ReportSummary summary, errLog
     Exit Sub
 Fail:
@@ -118,7 +141,7 @@ Fail:
 End Sub
 
 ' ============================================================================
-' READ + PARSE  (sections 1, 2)
+' READ + PARSE
 ' ============================================================================
 Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent, _
                             ByRef errLog As String) As Long
@@ -129,14 +152,13 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
     Dim rawDate As Variant, rawTime As Variant, desc As String
     Dim ev As TLEvent
 
-    Set xl = CreateObject("Excel.Application")     ' late-bound (section 8)
+    Set xl = CreateObject("Excel.Application")
     xl.Visible = False
     On Error GoTo CleanFail
     Set wb = xl.Workbooks.Open(filePath, ReadOnly:=True)
     Set ws = wb.Worksheets(1)
 
-    ' Match columns by header text (section 1) -- scan row 1
-    lastCol = ws.Cells(1, ws.Columns.count).End(-4159).Column   ' xlToLeft
+    lastCol = ws.Cells(1, ws.Columns.count).End(-4159).Column
     If lastCol < 1 Or lastCol > 200 Then lastCol = 50
     For c = 1 To lastCol
         hdr = LCase$(Trim$(CStr(ws.Cells(1, c).Value & "")))
@@ -157,7 +179,6 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
     Do
         rawDate = ws.Cells(r, colDate).Value
         desc = Trim$(CStr(ws.Cells(r, colDesc).Value & ""))
-        ' stop at first fully blank row (section 1)
         If (Len(Trim$(CStr(rawDate & ""))) = 0) And (Len(desc) = 0) Then Exit Do
 
         If Len(desc) = 0 Then
@@ -176,7 +197,7 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
             events(n) = ev
         End If
         r = r + 1
-        If r > 100000 Then Exit Do                 ' safety
+        If r > 100000 Then Exit Do
     Loop
 
     wb.Close False: xl.Quit
@@ -184,7 +205,7 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
 
     If n = 0 Then ReadEvents = 0: Exit Function
     ReDim Preserve events(1 To n)
-    SortEvents events, n                            ' by date, OrigIndex tiebreak (section 2)
+    SortEvents events, n
     ReadEvents = n
     Exit Function
 CleanFail:
@@ -195,8 +216,6 @@ CleanFail:
     ReadEvents = 0
 End Function
 
-' Parse a real date, or "April 2023" (month), or "2023" (year). Sets the record's
-' RawDate/Year/YearFrac/SortKey/DateLabel. Returns False if unparseable.
 Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boolean
     Dim s As String, mo As Integer, yr As Integer, d As Date
     ParseDateCell = False
@@ -211,7 +230,6 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
     s = Trim$(CStr(v & ""))
     If Len(s) = 0 Then Exit Function
 
-    ' "YYYY"
     If s Like "####" And IsNumeric(s) Then
         yr = CInt(s)
         If yr >= 1000 And yr <= 9999 Then
@@ -222,7 +240,6 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
         End If
     End If
 
-    ' "MonthName YYYY" / "Mon YYYY"
     Dim parts() As String
     parts = Split(s, " ")
     If UBound(parts) >= 1 Then
@@ -238,7 +255,6 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
         End If
     End If
 
-    ' last resort: let VBA try
     If IsDate(s) Then
         d = CDate(s)
         ev.RawDate = d
@@ -248,9 +264,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
     Exit Function
 
 Finish:
-    ev.Year = Year(ev.RawDate)
     ev.SortKey = CDbl(ev.RawDate)
-    ev.YearFrac = YearFraction(ev.RawDate)
     ParseDateCell = True
 End Function
 
@@ -264,14 +278,6 @@ Private Function MonthFromName(ByVal s As String) As Integer
         End If
     Next m
     MonthFromName = 0
-End Function
-
-' (DayOfYear-1)/(DaysInYear-1)  (section 2.4)
-Private Function YearFraction(ByVal d As Date) As Double
-    Dim doy As Long, diy As Long
-    doy = DateDiff("d", DateSerial(Year(d), 1, 1), d) + 1
-    diy = DateDiff("d", DateSerial(Year(d), 1, 1), DateSerial(Year(d), 12, 31)) + 1
-    If diy <= 1 Then YearFraction = 0 Else YearFraction = (doy - 1) / (diy - 1)
 End Function
 
 Private Function FormatTime(ByVal v As Variant) As String
@@ -292,69 +298,141 @@ Private Sub SortEvents(ByRef ev() As TLEvent, ByVal n As Long)
 End Sub
 
 ' ============================================================================
-' LAYOUT + DRAW  (sections 4-7) with autofit + multi-slide
+' UNIT MODEL  (Years / Months / Days / Hours)
+' ============================================================================
+Private Function UnitWord(ByVal t As String) As String
+    Select Case t
+        Case "Hours": UnitWord = "Hours"
+        Case "Days":  UnitWord = "Days"
+        Case "Months": UnitWord = "Months"
+        Case Else:    UnitWord = "Years"
+    End Select
+End Function
+
+Private Function IntervalCode(ByVal t As String) As String
+    Select Case t
+        Case "Hours": IntervalCode = "h"
+        Case "Days":  IntervalCode = "d"
+        Case "Months": IntervalCode = "m"
+        Case Else:    IntervalCode = "yyyy"
+    End Select
+End Function
+
+' Truncate a date down to the start of its unit (the column key).
+Private Function UnitStartOf(ByVal d As Date, ByVal t As String) As Date
+    Select Case t
+        Case "Hours": UnitStartOf = Int(CDbl(d)) + TimeSerial(Hour(d), 0, 0)
+        Case "Days":  UnitStartOf = DateSerial(Year(d), Month(d), Day(d))
+        Case "Months": UnitStartOf = DateSerial(Year(d), Month(d), 1)
+        Case Else:    UnitStartOf = DateSerial(Year(d), 1, 1)
+    End Select
+End Function
+
+' Position of a date within its unit, 0..1 (governs the leader-line X only).
+Private Function UnitFracOf(ByVal d As Date, ByVal t As String) As Double
+    Dim u As Date, span As Double
+    u = UnitStartOf(d, t)
+    span = CDbl(DateAdd(IntervalCode(t), 1, u)) - CDbl(u)
+    If span <= 0 Then UnitFracOf = 0 Else UnitFracOf = ClampD((CDbl(d) - CDbl(u)) / span, 0, 1)
+End Function
+
+' Build the list of column unit-starts: distinct (compact) or contiguous.
+Private Function ComputeColumns(ByRef ev() As TLEvent, ByVal n As Long, ByVal t As String, _
+                                ByVal allowGaps As Boolean, ByRef cols() As Date) As Long
+    Dim minU As Date, maxU As Date, i As Long
+    minU = ev(1).UnitStart: maxU = ev(1).UnitStart
+    For i = 1 To n
+        If ev(i).UnitStart < minU Then minU = ev(i).UnitStart
+        If ev(i).UnitStart > maxU Then maxU = ev(i).UnitStart
+    Next i
+
+    Dim cnt As Long
+    If allowGaps Then
+        ' compact: distinct unit-starts (events are already date-sorted)
+        ReDim cols(1 To n)
+        For i = 1 To n
+            If cnt = 0 Then
+                cnt = 1: cols(1) = ev(i).UnitStart
+            ElseIf ev(i).UnitStart <> cols(cnt) Then
+                cnt = cnt + 1: cols(cnt) = ev(i).UnitStart
+            End If
+        Next i
+        ReDim Preserve cols(1 To cnt)
+    Else
+        ' contiguous: every unit from minU to maxU
+        Dim d As Date
+        cnt = 0: d = minU
+        Do While d <= maxU
+            cnt = cnt + 1
+            If cnt > MAX_COLS + 1 Then Exit Do          ' stop runaway; caller alerts on > MAX_COLS
+            d = DateAdd(IntervalCode(t), 1, d)
+        Loop
+        ReDim cols(1 To cnt)
+        d = minU
+        For i = 1 To cnt
+            cols(i) = d
+            d = DateAdd(IntervalCode(t), 1, d)
+        Next i
+    End If
+    ComputeColumns = cnt
+End Function
+
+' ============================================================================
+' DRAW
 ' ============================================================================
 Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, ByVal n As Long, _
-                              ByVal includeEmpty As Boolean, ByVal allowMulti As Boolean, _
-                              ByVal animate As Boolean) As String
-    Dim sld As slide, sw As Single, sh As Single
+                              ByRef cols() As Date, ByVal nCols As Long, _
+                              ByVal t As String, ByVal barColor As String, _
+                              ByVal allowMulti As Boolean, ByVal doWipe As Boolean) As String
+    Dim sw As Single, sh As Single
     sw = firstSlide.parent.PageSetup.slideWidth
     sh = firstSlide.parent.PageSetup.slideHeight
 
-    ' distinct year columns (section 4)
-    Dim years() As Integer, nYears As Long
-    nYears = DistinctYears(ev, n, includeEmpty, years)
-
-    ' pre-measure description heights at base font (section 6.1, off-slide)
     Dim i As Long
     For i = 1 To n
         ev(i).DescH = MeasureDescHeight(firstSlide, ev(i).Desc, BOX_WIDTH - 2 * COL_PAD, "Arial", FS_DESC)
     Next i
 
-    ' how many year-columns fit per slide (width); the rest paginate when allowed
-    Dim usableW As Single, colsPerSlide As Long
-    usableW = sw - 2 * MARGIN
-    colsPerSlide = nYears
+    Dim colsPerSlide As Long
+    colsPerSlide = nCols
     If allowMulti Then
-        colsPerSlide = CLng(MaxS(1, Int(usableW / MIN_COL_W)))
-        If colsPerSlide > nYears Then colsPerSlide = nYears
+        colsPerSlide = CLng(MaxS(1, Int(sw / MIN_COL_W)))
+        If colsPerSlide > nCols Then colsPerSlide = nCols
     End If
 
-    Dim pageCount As Long, drawn As Long, overflowMsg As String
-    Dim startCol As Long, p As Long
-    pageCount = -Int(-nYears / colsPerSlide)        ' ceil
+    Dim pageCount As Long, drawn As Long, overflowMsg As String, p As Long, startCol As Long
+    pageCount = -Int(-nCols / colsPerSlide)
+    Dim sld As slide
     Set sld = firstSlide
 
     For p = 1 To pageCount
         startCol = (p - 1) * colsPerSlide
-        Dim pageYears() As Integer, pn As Long, k As Long
-        pn = CLng(MinS(colsPerSlide, nYears - startCol))
-        ReDim pageYears(1 To pn)
-        For k = 1 To pn: pageYears(k) = years(startCol + k): Next k
-
+        Dim pn As Long, k As Long
+        pn = CLng(MinS(colsPerSlide, nCols - startCol))
+        Dim pageCols() As Date
+        ReDim pageCols(1 To pn)
+        For k = 1 To pn: pageCols(k) = cols(startCol + k): Next k
         If p > 1 Then Set sld = NewPageSlide(firstSlide)
-        drawn = drawn + DrawPage(sld, ev, n, pageYears, pn, sw, sh, animate, overflowMsg)
+        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, overflowMsg)
     Next p
 
     DrawTimeline = "Events drawn: " & drawn & " of " & n & vbCrLf & _
-                   "Year columns: " & nYears & "   Slides: " & pageCount & overflowMsg
+                   LCase$(UnitWord(t)) & " columns: " & nCols & "   Slides: " & pageCount & overflowMsg
 End Function
 
-' Draw one slide's worth of year-columns; returns events drawn. Autofits vertically.
 Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
-                          ByRef pageYears() As Integer, ByVal pn As Long, _
-                          ByVal sw As Single, ByVal sh As Single, _
-                          ByVal animate As Boolean, ByRef overflowMsg As String) As Long
+                          ByRef pageCols() As Date, ByVal pn As Long, ByVal t As String, _
+                          ByVal barColor As String, ByVal sw As Single, ByVal sh As Single, _
+                          ByVal doWipe As Boolean, ByRef overflowMsg As String) As Long
     Dim colW As Single, availH As Single
-    colW = (sw - 2 * MARGIN) / pn
+    colW = sw / pn                                  ' full slide width (#3)
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
-    ' required height of the tallest column on this page -> autofit scale
     Dim ci As Long, maxH As Single, colH As Single, i As Long
     For ci = 1 To pn
         colH = 0
         For i = 1 To n
-            If ev(i).Year = pageYears(ci) Then colH = colH + DATE_HEIGHT + ev(i).DescH + ROW_GAP
+            If ev(i).UnitStart = pageCols(ci) Then colH = colH + DATE_HEIGHT + ev(i).DescH + ROW_GAP
         Next i
         If colH > maxH Then maxH = colH
     Next ci
@@ -365,95 +443,33 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
     If sc < MIN_SCALE Then
         sc = MIN_SCALE
         overflowMsg = vbCrLf & "NOTE: content exceeds one slide even at minimum size on some columns." & _
-                      vbCrLf & "Consider enabling multi-slide split or trimming descriptions."
+                      vbCrLf & "Consider multi-slide split, gaps, or trimming descriptions."
     End If
     If sc > 1 Then sc = 1
 
     Dim bandBottom As Single
     bandBottom = BAND_TOP + BAND_HEIGHT * sc
 
-    ' year band: a DateBar-style gray gradient bar, grouped as "BottomBar" (section 5)
-    DrawYearBand sld, pageYears, pn, colW, sc
+    DrawBar sld, pageCols, pn, colW, sc, t, barColor
 
     Dim drawn As Long, animSeq As Long
     For ci = 1 To pn
-        Dim colLeft As Single
-        colLeft = MARGIN + (ci - 1) * colW
-        drawn = drawn + DrawColumn(sld, ev, n, pageYears(ci), colLeft, colW, bandBottom, _
-                                   availH, sc, animate, animSeq)
+        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), (ci - 1) * colW, colW, bandBottom, sc, doWipe, animSeq)
     Next ci
 
-    ApplyZOrder sld                                 ' section 6.7
+    ApplyZOrder sld
     DrawPage = drawn
 End Function
 
-' One year-column: stacked cards + date-accurate leader lines (section 6)
-Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
-                            ByVal yr As Integer, ByVal colLeft As Single, ByVal colW As Single, _
-                            ByVal bandBottom As Single, ByVal availH As Single, ByVal sc As Single, _
-                            ByVal animate As Boolean, ByRef animSeq As Long) As Long
-    Dim innerL As Single, innerR As Single, boxW As Single
-    innerL = colLeft + COL_PAD
-    innerR = colLeft + colW - COL_PAD
-    boxW = BOX_WIDTH * sc
-    If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
-
-    Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long, lastDate As Double
-    cursorY = bandBottom + BAND_GAP * sc
-    prevLeft = innerL
-    lastDate = -1
-
-    For i = 1 To n
-        If ev(i).Year = yr Then
-            Dim dateX As Single, boxLeft As Single, dH As Single, descH As Single
-            ' auto-fit the date box height so long labels (e.g. "September 1962") don't overflow
-            dH = MaxS(DATE_HEIGHT * sc, MeasureDescHeight(sld, ev(i).DateLabel, boxW, "Arial", FS_DATE * sc))
-            descH = ev(i).DescH * sc
-
-            ' date-accurate leader-line X (section 6.4) -- NOT the box center
-            dateX = innerL + ClampD(ev(i).YearFrac, 0, 1) * (innerR - innerL)
-
-            ' box left so the line meets it LINE_INSET from its edge; monotonic stagger (6.3)
-            boxLeft = dateX - LINE_INSET * sc
-            If boxLeft < prevLeft Then boxLeft = prevLeft        ' monotonic
-            If boxLeft > innerR - boxW Then boxLeft = innerR - boxW
-            If boxLeft < innerL Then boxLeft = innerL
-            prevLeft = boxLeft
-
-            ' the two boxes (section 6.2)
-            Dim dateMidY As Single, dShp As Shape, descShp As Shape
-            Set dShp = PlaceDateBox(sld, ev(i).DateLabel, boxLeft, cursorY, boxW, dH, sc)
-            dateMidY = cursorY + dH / 2
-            Set descShp = PlaceDescBox(sld, ev(i).Desc, boxLeft, cursorY + dH, boxW, descH, sc)
-
-            ' leader line: vertical at the date-accurate X, band bottom -> date-box middle (6.5)
-            If ev(i).SortKey <> lastDate Then
-                DrawLeaderLine sld, dateX, bandBottom, dateMidY
-            End If
-            lastDate = ev(i).SortKey
-
-            If animate Then
-                AddFade sld, dShp, True
-                AddFade sld, descShp, False
-                animSeq = animSeq + 1
-            End If
-            cursorY = cursorY + dH + descH + ROW_GAP * sc
-            drawn = drawn + 1
-        End If
-    Next i
-    DrawColumn = drawn
-End Function
-
-' The year band, built like a DateBar: one gray-gradient cell per year column,
-' then grouped and named "BottomBar" (the same artifact as datebar + Table-to-Object).
-Private Sub DrawYearBand(ByVal sld As slide, ByRef pageYears() As Integer, ByVal pn As Long, _
-                         ByVal colW As Single, ByVal sc As Single)
-    Dim cellNames() As String, ci As Long, colLeft As Single, sh As Shape
+' The DateBar-style band: gradient cell per column, grouped + named "BottomBar".
+Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Long, _
+                    ByVal colW As Single, ByVal sc As Single, ByVal t As String, ByVal barColor As String)
+    Dim cellNames() As String, ci As Long, sh As Shape, isGreen As Boolean
+    isGreen = (LCase$(barColor) = "green")
     ReDim cellNames(1 To pn)
     For ci = 1 To pn
-        colLeft = MARGIN + (ci - 1) * colW
-        Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLeft, BAND_TOP, colW, BAND_HEIGHT * sc)
-        StyleBandCell sh, CStr(pageYears(ci)), sc
+        Set sh = sld.Shapes.AddShape(msoShapeRectangle, (ci - 1) * colW, BAND_TOP, colW, BAND_HEIGHT * sc)
+        StyleBandCell sh, GetSegmentLabel(t, pageCols(ci)), sc, isGreen
         sh.Name = SHAPE_PREFIX & "_BandCell_" & ci & "_" & sld.SlideIndex
         cellNames(ci) = sh.Name
     Next ci
@@ -465,15 +481,25 @@ Private Sub DrawYearBand(ByVal sld As slide, ByRef pageYears() As Integer, ByVal
         Set grp = sld.Shapes.Range(cellNames).Group
     End If
     grp.Name = "BottomBar"
+    With grp.Shadow                                 ' #1 drop shadow on the whole band
+        .Visible = msoTrue
+        .Type = msoShadow21
+        .IncrementOffsetX 3
+        .IncrementOffsetY 3
+    End With
 End Sub
 
-' DateBar gray gradient cell (top light gray -> near-black bottom, white bold text).
-Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As Single)
+Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As Single, ByVal isGreen As Boolean)
     With sh.fill
         .Visible = msoTrue
         .TwoColorGradient msoGradientVertical, 1
-        .GradientStops(1).Color.RGB = RGB(166, 166, 166)
-        .GradientStops(2).Color.RGB = RGB(38, 38, 38)
+        If isGreen Then
+            .GradientStops(1).Color.RGB = RGB(0, 176, 80)
+            .GradientStops(2).Color.RGB = RGB(0, 70, 32)
+        Else
+            .GradientStops(1).Color.RGB = RGB(166, 166, 166)
+            .GradientStops(2).Color.RGB = RGB(38, 38, 38)
+        End If
         .GradientAngle = 90
     End With
     sh.line.ForeColor.RGB = RGB(0, 0, 0)
@@ -484,43 +510,121 @@ Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As 
         With .TextRange
             .text = label
             .Font.Name = "Arial"
-            .Font.Size = FS_YEAR * sc
+            .Font.Size = FS_LABEL * sc
             .Font.bold = msoTrue
             .Font.Color.RGB = RGB(255, 255, 255)
             .ParagraphFormat.Alignment = ppAlignCenter
         End With
     End With
+    ' text drop shadow (best-effort; VBA can be finicky here)
+    On Error Resume Next
+    With sh.TextFrame2.TextRange.Font.Shadow
+        .Visible = msoTrue
+        .Style = msoShadowStyleOuterShadow
+        .Blur = 3
+        .Transparency = 0.5
+        .Size = 100
+        .OffsetX = 1.5
+        .OffsetY = 1.5
+    End With
+    On Error GoTo 0
 End Sub
 
-Private Function PlaceDateBox(ByVal sld As slide, ByVal label As String, ByVal x As Single, ByVal y As Single, _
-                              ByVal w As Single, ByVal h As Single, ByVal sc As Single) As Shape
-    Dim sh As Shape
-    Set sh = sld.Shapes.AddShape(msoShapeRectangle, x, y, w, h)
-    StyleBox sh, NAVY(), WHITE(), label, "Arial", FS_DATE * sc, True, True
-    sh.Name = SHAPE_PREFIX & "_Date_" & sld.Shapes.count
-    Set PlaceDateBox = sh
+' One unit-column of stacked entries with date-accurate leader lines.
+Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
+                            ByVal colUnit As Date, ByVal colLeft As Single, ByVal colW As Single, _
+                            ByVal bandBottom As Single, ByVal sc As Single, _
+                            ByVal doWipe As Boolean, ByRef animSeq As Long) As Long
+    Dim innerL As Single, innerR As Single, boxW As Single
+    innerL = colLeft + COL_PAD
+    innerR = colLeft + colW - COL_PAD
+    boxW = BOX_WIDTH * sc
+    If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
+
+    Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long, lastKey As Double
+    cursorY = bandBottom + BAND_GAP * sc
+    prevLeft = innerL
+    lastKey = -1
+
+    For i = 1 To n
+        If ev(i).UnitStart = colUnit Then
+            Dim dateX As Single, boxLeft As Single, dH As Single, descH As Single
+            dH = MaxS(DATE_HEIGHT * sc, MeasureDescHeight(sld, ev(i).DateLabel, boxW, "Arial", FS_DATE * sc))
+            descH = ev(i).DescH * sc
+
+            dateX = innerL + ClampD(ev(i).UnitFrac, 0, 1) * (innerR - innerL)
+            boxLeft = dateX - LINE_INSET * sc
+            If boxLeft < prevLeft Then boxLeft = prevLeft
+            If boxLeft > innerR - boxW Then boxLeft = innerR - boxW
+            If boxLeft < innerL Then boxLeft = innerL
+            prevLeft = boxLeft
+
+            animSeq = animSeq + 1
+            Dim grp As Shape, ln As Shape
+            Set grp = PlaceEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, dH, descH, sc, animSeq)
+
+            If ev(i).SortKey <> lastKey Then
+                Set ln = DrawLeaderLine(sld, dateX, bandBottom, cursorY + dH / 2, animSeq)
+            End If
+            lastKey = ev(i).SortKey
+
+            If doWipe Then
+                AddWipe sld, grp, True
+                If Not ln Is Nothing Then AddWipe sld, ln, False
+            End If
+            Set ln = Nothing
+
+            cursorY = cursorY + dH + descH + ROW_GAP * sc
+            drawn = drawn + 1
+        End If
+    Next i
+    DrawColumn = drawn
 End Function
 
-Private Function PlaceDescBox(ByVal sld As slide, ByVal text As String, ByVal x As Single, ByVal y As Single, _
-                              ByVal w As Single, ByVal h As Single, ByVal sc As Single) As Shape
-    Dim sh As Shape
-    Set sh = sld.Shapes.AddShape(msoShapeRectangle, x, y, w, h)
-    StyleBox sh, WHITE(), NAVY(), text, "Arial", FS_DESC * sc, False, False
-    sh.TextFrame.WordWrap = msoTrue
-    sh.TextFrame2.VerticalAnchor = msoAnchorTop
-    sh.Name = SHAPE_PREFIX & "_Desc_" & sld.Shapes.count
-    Set PlaceDescBox = sh
+' A Make-Entry-style entry: navy date box + white entry box, GroupStyle-tagged,
+' grouped, drop-shadowed. (The date-accurate LeadingLine is added separately.)
+Private Function PlaceEntry(ByVal sld As slide, ByVal dateText As String, ByVal descText As String, _
+                            ByVal boxLeft As Single, ByVal boxTop As Single, ByVal boxW As Single, _
+                            ByVal dH As Single, ByVal descH As Single, ByVal sc As Single, _
+                            ByVal idx As Long) As Shape
+    Dim db As Shape, eb As Shape, grp As Shape
+    Set db = sld.Shapes.AddShape(msoShapeRectangle, boxLeft, boxTop, boxW, dH)
+    StyleBox db, NAVY(), WHITE(), dateText, "Arial", FS_DATE * sc, True, True
+    db.line.ForeColor.RGB = RGB(0, 0, 0)
+    db.TextFrame.WordWrap = msoTrue
+    db.Tags.Add "GroupStyle", "Date Box"
+    db.Name = SHAPE_PREFIX & "_Date_" & idx
+
+    Set eb = sld.Shapes.AddShape(msoShapeRectangle, boxLeft, boxTop + dH, boxW, descH)
+    StyleBox eb, WHITE(), NAVY(), descText, "Arial", FS_DESC * sc, False, False
+    eb.line.ForeColor.RGB = RGB(0, 0, 0)
+    eb.TextFrame.WordWrap = msoTrue
+    eb.TextFrame2.VerticalAnchor = msoAnchorTop
+    eb.Tags.Add "GroupStyle", "Entry Box"
+    eb.Name = SHAPE_PREFIX & "_Desc_" & idx
+
+    Set grp = sld.Shapes.Range(Array(db.Name, eb.Name)).Group
+    grp.Name = SHAPE_PREFIX & "_Entry_" & idx
+    With grp.Shadow
+        .Visible = msoTrue
+        .Type = msoShadow21
+        .IncrementOffsetX 3
+        .IncrementOffsetY 3
+    End With
+    Set PlaceEntry = grp
 End Function
 
-Private Sub DrawLeaderLine(ByVal sld As slide, ByVal x As Single, ByVal y1 As Single, ByVal y2 As Single)
+Private Function DrawLeaderLine(ByVal sld As slide, ByVal x As Single, ByVal y1 As Single, _
+                               ByVal y2 As Single, ByVal idx As Long) As Shape
     Dim ln As Shape
     Set ln = sld.Shapes.AddLine(x, y1, x, y2)
-    ln.line.ForeColor.RGB = NAVY()
+    ln.line.ForeColor.RGB = RGB(0, 0, 0)
     ln.line.Weight = BORDER_PT
-    ln.Name = SHAPE_PREFIX & "_Line_" & sld.Shapes.count
-End Sub
+    ln.Name = "LeadingLine" & Format$(idx, "00") & "_" & SHAPE_PREFIX
+    ln.ZOrder msoSendToBack
+    Set DrawLeaderLine = ln
+End Function
 
-' Shared box styling
 Private Sub StyleBox(ByVal sh As Shape, ByVal fill As Long, ByVal txtOrBorder As Long, _
                      ByVal text As String, ByVal fName As String, ByVal fSize As Single, _
                      ByVal bold As Boolean, ByVal centered As Boolean)
@@ -541,16 +645,25 @@ Private Sub StyleBox(ByVal sh As Shape, ByVal fill As Long, ByVal txtOrBorder As
     End With
 End Sub
 
-' z-order without naming the band: push lines behind the boxes (section 6.7)
+' Top-to-bottom wipe entrance (#6). LeadingLines come in with the entry.
+Private Sub AddWipe(ByVal sld As slide, ByVal shp As Shape, ByVal firstOfCard As Boolean)
+    On Error Resume Next
+    Dim eff As Effect, trig As Long
+    trig = IIf(firstOfCard, msoAnimTriggerOnPageClick, msoAnimTriggerWithPrevious)
+    Set eff = sld.TimeLine.MainSequence.AddEffect(shp, msoAnimEffectWipe, , trig)
+    eff.EffectParameters.Direction = msoAnimDirectionTop
+End Sub
+
+' Send all leader lines behind everything else (z-order, without naming the band).
 Private Sub ApplyZOrder(ByVal sld As slide)
-    Dim sh As Shape
-    For Each sh In sld.Shapes
-        If sh.Name Like SHAPE_PREFIX & "_Line_*" Then sh.ZOrder msoSendToBack
-    Next sh
+    Dim shp As Shape
+    For Each shp In sld.Shapes
+        If shp.Name Like "LeadingLine*" Then shp.ZOrder msoSendToBack
+    Next shp
 End Sub
 
 ' ============================================================================
-' MEASURE / SLIDES / CLEAR / TEMPLATE / PICKER / REPORT  (section 8)
+' MEASURE / SLIDES / CLEAR / TEMPLATE / PICKER / REPORT / UTIL
 ' ============================================================================
 Private Function MeasureDescHeight(ByVal sld As slide, ByVal text As String, ByVal w As Single, _
                                    ByVal fName As String, ByVal fSize As Single) As Single
@@ -583,12 +696,11 @@ Private Function NewPageSlide(ByVal refSlide As slide) As slide
 End Function
 
 Private Sub ClearPriorOutput(ByVal sld As slide)
-    ' delete prior cards + the prior year band on the active slide
     Dim i As Long
     For i = sld.Shapes.count To 1 Step -1
-        If (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Or (sld.Shapes(i).Name = "BottomBar") Then sld.Shapes(i).Delete
+        If (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Or (sld.Shapes(i).Name = "BottomBar") _
+           Or (sld.Shapes(i).Name Like "LeadingLine*" & SHAPE_PREFIX) Then sld.Shapes(i).Delete
     Next i
-    ' delete extra slides this tool created previously
     Dim s As Long
     For s = ActivePresentation.Slides.count To 1 Step -1
         If ActivePresentation.Slides(s).SlideIndex <> sld.SlideIndex Then
@@ -634,7 +746,7 @@ Private Sub CreateTimelineTemplate()
     xl.Quit
     On Error GoTo 0
     MsgBox "Blank template saved:" & vbCrLf & vbCrLf & savePath & vbCrLf & vbCrLf & _
-           "Fill in the Date and Description columns (Time optional), then run Import Timeline again.", _
+           "Fill in the Date and Description columns (Time optional), then run Make Timeline again.", _
            vbInformation, "Timeline Creator"
 End Sub
 
@@ -660,41 +772,4 @@ Private Function MinS(ByVal a As Single, ByVal b As Single) As Single
 End Function
 Private Function MaxS(ByVal a As Single, ByVal b As Single) As Single
     If a > b Then MaxS = a Else MaxS = b
-End Function
-
-' Optional fade entrance (section 7). Columns draw earliest-year first and each
-' column is in date order, so draw order is already chronological.
-Private Sub AddFade(ByVal sld As slide, ByVal shp As Shape, ByVal firstOfCard As Boolean)
-    On Error Resume Next
-    Dim trig As Long
-    trig = IIf(firstOfCard, msoAnimTriggerOnPageClick, msoAnimTriggerWithPrevious)
-    sld.TimeLine.MainSequence.AddEffect shp, msoAnimEffectFade, , trig
-End Sub
-
-Private Function DistinctYears(ByRef ev() As TLEvent, ByVal n As Long, ByVal includeEmpty As Boolean, _
-                               ByRef years() As Integer) As Long
-    Dim minY As Integer, maxY As Integer, i As Long, cnt As Long, y As Integer
-    minY = 32767: maxY = -32767
-    For i = 1 To n
-        If ev(i).Year < minY Then minY = ev(i).Year
-        If ev(i).Year > maxY Then maxY = ev(i).Year
-    Next i
-
-    If includeEmpty Then
-        cnt = maxY - minY + 1
-        ReDim years(1 To cnt)
-        For y = minY To maxY: years(y - minY + 1) = y: Next y
-        DistinctYears = cnt
-    Else
-        ReDim years(1 To (maxY - minY + 1))
-        For y = minY To maxY
-            For i = 1 To n
-                If ev(i).Year = y Then
-                    cnt = cnt + 1: years(cnt) = y: Exit For
-                End If
-            Next i
-        Next y
-        ReDim Preserve years(1 To cnt)
-        DistinctYears = cnt
-    End If
 End Function
