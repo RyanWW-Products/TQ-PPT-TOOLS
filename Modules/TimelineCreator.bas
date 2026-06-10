@@ -345,9 +345,8 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
                           ByRef pageYears() As Integer, ByVal pn As Long, _
                           ByVal sw As Single, ByVal sh As Single, _
                           ByVal animate As Boolean, ByRef overflowMsg As String) As Long
-    Dim colW As Single, availH As Single, bandCenterY As Single
+    Dim colW As Single, availH As Single
     colW = (sw - 2 * MARGIN) / pn
-    bandCenterY = BAND_TOP + BAND_HEIGHT / 2
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
     ' required height of the tallest column on this page -> autofit scale
@@ -370,13 +369,17 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
     End If
     If sc > 1 Then sc = 1
 
+    Dim bandBottom As Single
+    bandBottom = BAND_TOP + BAND_HEIGHT * sc
+
+    ' year band: a DateBar-style gray gradient bar, grouped as "BottomBar" (section 5)
+    DrawYearBand sld, pageYears, pn, colW, sc
+
     Dim drawn As Long, animSeq As Long
-    ' year band (section 5) + each column (section 6)
     For ci = 1 To pn
         Dim colLeft As Single
         colLeft = MARGIN + (ci - 1) * colW
-        DrawYearBox sld, pageYears(ci), colLeft, colW, sc
-        drawn = drawn + DrawColumn(sld, ev, n, pageYears(ci), colLeft, colW, bandCenterY, _
+        drawn = drawn + DrawColumn(sld, ev, n, pageYears(ci), colLeft, colW, bandBottom, _
                                    availH, sc, animate, animSeq)
     Next ci
 
@@ -387,7 +390,7 @@ End Function
 ' One year-column: stacked cards + date-accurate leader lines (section 6)
 Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
                             ByVal yr As Integer, ByVal colLeft As Single, ByVal colW As Single, _
-                            ByVal bandCenterY As Single, ByVal availH As Single, ByVal sc As Single, _
+                            ByVal bandBottom As Single, ByVal availH As Single, ByVal sc As Single, _
                             ByVal animate As Boolean, ByRef animSeq As Long) As Long
     Dim innerL As Single, innerR As Single, boxW As Single
     innerL = colLeft + COL_PAD
@@ -396,14 +399,15 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
     If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
 
     Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long, lastDate As Double
-    cursorY = BAND_TOP + BAND_HEIGHT + BAND_GAP * sc
+    cursorY = bandBottom + BAND_GAP * sc
     prevLeft = innerL
     lastDate = -1
 
     For i = 1 To n
         If ev(i).Year = yr Then
             Dim dateX As Single, boxLeft As Single, dH As Single, descH As Single
-            dH = DATE_HEIGHT * sc
+            ' auto-fit the date box height so long labels (e.g. "September 1962") don't overflow
+            dH = MaxS(DATE_HEIGHT * sc, MeasureDescHeight(sld, ev(i).DateLabel, boxW, "Arial", FS_DATE * sc))
             descH = ev(i).DescH * sc
 
             ' date-accurate leader-line X (section 6.4) -- NOT the box center
@@ -422,9 +426,9 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
             dateMidY = cursorY + dH / 2
             Set descShp = PlaceDescBox(sld, ev(i).Desc, boxLeft, cursorY + dH, boxW, descH, sc)
 
-            ' leader line: vertical at the date-accurate X, band -> date-box middle (6.5)
+            ' leader line: vertical at the date-accurate X, band bottom -> date-box middle (6.5)
             If ev(i).SortKey <> lastDate Then
-                DrawLeaderLine sld, dateX, bandCenterY, dateMidY
+                DrawLeaderLine sld, dateX, bandBottom, dateMidY
             End If
             lastDate = ev(i).SortKey
 
@@ -440,13 +444,52 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
     DrawColumn = drawn
 End Function
 
-Private Sub DrawYearBox(ByVal sld As slide, ByVal yr As Integer, ByVal colLeft As Single, _
-                        ByVal colW As Single, ByVal sc As Single)
-    Dim w As Single, sh As Shape
-    w = MinS(colW - 2 * COL_PAD, 120 * sc)
-    Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLeft + (colW - w) / 2, BAND_TOP, w, BAND_HEIGHT * sc)
-    StyleBox sh, NAVY(), WHITE(), CStr(yr), "Arial", FS_YEAR * sc, True, True
-    sh.Name = SHAPE_PREFIX & "_Year_" & yr & "_" & sld.SlideIndex
+' The year band, built like a DateBar: one gray-gradient cell per year column,
+' then grouped and named "BottomBar" (the same artifact as datebar + Table-to-Object).
+Private Sub DrawYearBand(ByVal sld As slide, ByRef pageYears() As Integer, ByVal pn As Long, _
+                         ByVal colW As Single, ByVal sc As Single)
+    Dim cellNames() As String, ci As Long, colLeft As Single, sh As Shape
+    ReDim cellNames(1 To pn)
+    For ci = 1 To pn
+        colLeft = MARGIN + (ci - 1) * colW
+        Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLeft, BAND_TOP, colW, BAND_HEIGHT * sc)
+        StyleBandCell sh, CStr(pageYears(ci)), sc
+        sh.Name = SHAPE_PREFIX & "_BandCell_" & ci & "_" & sld.SlideIndex
+        cellNames(ci) = sh.Name
+    Next ci
+
+    Dim grp As Shape
+    If pn = 1 Then
+        Set grp = sld.Shapes(cellNames(1))
+    Else
+        Set grp = sld.Shapes.Range(cellNames).Group
+    End If
+    grp.Name = "BottomBar"
+End Sub
+
+' DateBar gray gradient cell (top light gray -> near-black bottom, white bold text).
+Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As Single)
+    With sh.fill
+        .Visible = msoTrue
+        .TwoColorGradient msoGradientVertical, 1
+        .GradientStops(1).Color.RGB = RGB(166, 166, 166)
+        .GradientStops(2).Color.RGB = RGB(38, 38, 38)
+        .GradientAngle = 90
+    End With
+    sh.line.ForeColor.RGB = RGB(0, 0, 0)
+    sh.line.Weight = 1
+    With sh.TextFrame
+        .MarginLeft = 2: .MarginRight = 2: .MarginTop = 1: .MarginBottom = 1
+        .VerticalAnchor = msoAnchorMiddle
+        With .TextRange
+            .text = label
+            .Font.Name = "Arial"
+            .Font.Size = FS_YEAR * sc
+            .Font.bold = msoTrue
+            .Font.Color.RGB = RGB(255, 255, 255)
+            .ParagraphFormat.Alignment = ppAlignCenter
+        End With
+    End With
 End Sub
 
 Private Function PlaceDateBox(ByVal sld As slide, ByVal label As String, ByVal x As Single, ByVal y As Single, _
@@ -540,10 +583,10 @@ Private Function NewPageSlide(ByVal refSlide As slide) As slide
 End Function
 
 Private Sub ClearPriorOutput(ByVal sld As slide)
-    ' delete prior cards on the active slide
+    ' delete prior cards + the prior year band on the active slide
     Dim i As Long
     For i = sld.Shapes.count To 1 Step -1
-        If sld.Shapes(i).Name Like SHAPE_PREFIX & "*" Then sld.Shapes(i).Delete
+        If (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Or (sld.Shapes(i).Name = "BottomBar") Then sld.Shapes(i).Delete
     Next i
     ' delete extra slides this tool created previously
     Dim s As Long
