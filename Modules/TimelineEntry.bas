@@ -1,89 +1,98 @@
 Attribute VB_Name = "TimelineEntry"
-Sub EntryGenerator(control As IRibbonControl)
-    Static lineCounter As Integer
-    Dim oSlide As slide
-    Dim oDateBox As Shape
-    Dim oEntryBox As Shape
-    Dim oGroup As Shape
-    Dim oLine As Shape
-    Dim lineName As String
+Option Explicit
 
-    ' Ensure that a slide is selected.
+' Make Entry: a navy date box + white entry box (GroupStyle-tagged, drop-shadowed)
+' plus a LeadingLine, all in ONE group. The core CreateTimelineEntry is reused by
+' the Timeline Creator so imported entries are identical to hand-made ones.
+
+Sub EntryGenerator(control As IRibbonControl)
+    Dim oSlide As slide, dummy As Single
     If ActiveWindow.Selection.SlideRange.count = 0 Then
         MsgBox "Please select a slide first!", vbExclamation
         Exit Sub
     End If
+    Set oSlide = ActiveWindow.Selection.SlideRange(1)
+    ' lineX/lineTopY < 0 -> Make-Entry default (centered, 50pt stub above)
+    CreateTimelineEntry oSlide, "12/12/2099", "Lorem Ipsum", 100, 100, 2 * 72, _
+                        -1, -1, False, 1, dummy
+End Sub
 
-    ' Increment line counter for unique naming.
+' Build one entry; return the final group. lineX/lineTopY >= 0 place the leader
+' line exactly there (the Timeline Creator passes a date-accurate X + bar bottom);
+' < 0 uses the Make-Entry default. boxesHeight returns the date+entry box height
+' (the caller uses it to stack the next entry).
+Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As String, ByVal descText As String, _
+        ByVal boxLeft As Single, ByVal boxTop As Single, ByVal boxW As Single, _
+        ByVal lineX As Single, ByVal lineTopY As Single, ByVal fixedWidth As Boolean, _
+        ByVal fontScale As Single, ByRef boxesHeight As Single) As Shape
+    Static lineCounter As Long
+    Dim oDateBox As Shape, oEntryBox As Shape, oBoxGroup As Shape, oLine As Shape
     lineCounter = lineCounter + 1
 
-    ' Set the current slide.
-    Set oSlide = ActiveWindow.Selection.SlideRange(1)
-
-    ' Create the Date box.
-    Set oDateBox = oSlide.Shapes.AddTextbox(Orientation:=msoTextOrientationHorizontal, _
-                                            Left:=100, Top:=100, Width:=2 * 72, Height:=50)
+    ' Date box (navy fill, white bold text)
+    Set oDateBox = oSlide.Shapes.AddTextbox(msoTextOrientationHorizontal, boxLeft, boxTop, boxW, 50)
     With oDateBox
-        .Fill.ForeColor.RGB = RGB(4, 61, 102)
+        .fill.ForeColor.RGB = RGB(4, 61, 102)
         .line.Weight = 1.5
         .line.ForeColor.RGB = RGB(0, 0, 0)
-        .TextFrame.TextRange.text = "12/12/2099"
-        .TextFrame.TextRange.Font.Name = "Arial"
-        .TextFrame.TextRange.Font.Size = 12
-        .TextFrame.TextRange.Font.Bold = msoTrue
-        .TextFrame.TextRange.Font.Color.RGB = RGB(255, 255, 255)
-        .TextFrame.TextRange.Paragraphs.ParagraphFormat.Alignment = ppAlignCenter
-        .TextFrame.MarginTop = 3
-        .TextFrame.MarginBottom = 3
-        .TextFrame.AutoSize = ppAutoSizeShapeToFitText
-        .TextFrame.VerticalAnchor = msoAnchorBottom
+        With .TextFrame
+            .MarginTop = 3: .MarginBottom = 3
+            If fixedWidth Then .WordWrap = msoTrue
+            With .TextRange
+                .text = dateText
+                .Font.Name = "Arial"
+                .Font.Size = 12 * fontScale
+                .Font.Bold = msoTrue
+                .Font.Color.RGB = RGB(255, 255, 255)
+                .ParagraphFormat.Alignment = ppAlignCenter
+            End With
+            .AutoSize = ppAutoSizeShapeToFitText
+            .VerticalAnchor = msoAnchorBottom
+        End With
     End With
-    ' Auto-assign "Date Box" style.
     oDateBox.Tags.Add "GroupStyle", "Date Box"
 
-    ' Create the Entry box.
-    Set oEntryBox = oSlide.Shapes.AddTextbox(Orientation:=msoTextOrientationHorizontal, _
-                                             Left:=oDateBox.Left, Top:=oDateBox.Top + oDateBox.Height, _
-                                             Width:=2 * 72, Height:=50)
+    ' Entry box (white fill, BLACK text)
+    Set oEntryBox = oSlide.Shapes.AddTextbox(msoTextOrientationHorizontal, oDateBox.Left, _
+                                             oDateBox.Top + oDateBox.Height, boxW, 50)
     With oEntryBox
-        .Fill.ForeColor.RGB = RGB(255, 255, 255)
+        .fill.ForeColor.RGB = RGB(255, 255, 255)
         .line.Weight = 1.5
         .line.ForeColor.RGB = RGB(0, 0, 0)
-        .TextFrame.TextRange.text = "Lorem Ipsum"
-        .TextFrame.TextRange.Font.Name = "Arial"
-        .TextFrame.TextRange.Font.Size = 12
-        .TextFrame.TextRange.Font.Color.RGB = RGB(0, 0, 0)
-        .TextFrame.TextRange.Paragraphs.ParagraphFormat.Alignment = ppAlignLeft
-        .TextFrame.MarginTop = 3
-        .TextFrame.MarginBottom = 3
-        .TextFrame.AutoSize = ppAutoSizeShapeToFitText
+        With .TextFrame
+            .MarginTop = 3: .MarginBottom = 3
+            If fixedWidth Then .WordWrap = msoTrue
+            With .TextRange
+                .text = descText
+                .Font.Name = "Arial"
+                .Font.Size = 12 * fontScale
+                .Font.Color.RGB = RGB(0, 0, 0)
+                .ParagraphFormat.Alignment = ppAlignLeft
+            End With
+            .AutoSize = ppAutoSizeShapeToFitText
+        End With
     End With
-    ' Auto-assign "Entry Box" style.
     oEntryBox.Tags.Add "GroupStyle", "Entry Box"
 
-    ' Group the two boxes.
-    Set oGroup = oSlide.Shapes.range(Array(oDateBox.Name, oEntryBox.Name)).Group
+    boxesHeight = oDateBox.Height + oEntryBox.Height
 
-    ' Add drop shadow to the group.
-    With oGroup.Shadow
+    Set oBoxGroup = oSlide.Shapes.range(Array(oDateBox.Name, oEntryBox.Name)).Group
+    With oBoxGroup.Shadow
         .Type = msoShadow21
         .IncrementOffsetX 3
         .IncrementOffsetY 3
     End With
 
-    ' Create and name the vertical line segment.
-    lineName = "LeadingLine" & Format(lineCounter, "00")
-    Set oLine = oSlide.Shapes.AddLine(oGroup.Left + oGroup.Width / 2, oGroup.Top - 50, _
-                                      oGroup.Left + oGroup.Width / 2, oGroup.Top + oGroup.Height - oDateBox.Height)
-    oLine.Name = lineName
-    With oLine
-        .line.Weight = 1.5
-        .line.ForeColor.RGB = RGB(0, 0, 0)
-        .ZOrder msoSendToBack
+    Dim lx As Single, lty As Single
+    If lineX < 0 Then lx = oBoxGroup.Left + oBoxGroup.Width / 2 Else lx = lineX
+    If lineTopY < 0 Then lty = oBoxGroup.Top - 50 Else lty = lineTopY
+    Set oLine = oSlide.Shapes.AddLine(lx, lty, lx, oDateBox.Top + oDateBox.Height)
+    oLine.Name = "LeadingLine" & Format$(lineCounter, "00")
+    With oLine.line
+        .Weight = 1.5
+        .ForeColor.RGB = RGB(0, 0, 0)
     End With
+    oLine.ZOrder msoSendToBack
 
-    ' Group everything.
-    oSlide.Shapes.range(Array(oGroup.Name, oLine.Name)).Group
-End Sub
-
-
+    Set CreateTimelineEntry = oSlide.Shapes.range(Array(oBoxGroup.Name, oLine.Name)).Group
+End Function

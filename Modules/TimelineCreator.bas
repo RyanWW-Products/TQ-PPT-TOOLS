@@ -92,16 +92,25 @@ Public Sub BuildTimeline(control As IRibbonControl)
         Exit Sub
     End If
 
-    ' Timeline unit + bar color (reuse the DateBar settings dialog)
-    Dim timelineType As String, timelineColor As String
-    Dim frm As TimelineSettings
-    Set frm = New TimelineSettings
-    frm.Caption = "Timeline Type"
-    frm.Show
-    If frm.Tag <> "OK" Then Unload frm: Exit Sub
-    timelineType = frm.timelineType
-    timelineColor = frm.timelineColor
-    Unload frm
+    ' Timeline unit + bar color: auto-suggest, with a manual override (the DateBar dialog)
+    Dim timelineType As String, timelineColor As String, detected As String
+    detected = DetectType(events, n)
+    If MsgBox("This looks like a " & UnitWord(detected) & " timeline." & vbCrLf & vbCrLf & _
+              "Yes = continue with " & UnitWord(detected) & vbCrLf & _
+              "No  = choose the type and color myself", _
+              vbYesNo + vbQuestion, "Timeline Type") = vbYes Then
+        timelineType = detected
+        timelineColor = "Green"
+    Else
+        Dim frm As TimelineSettings
+        Set frm = New TimelineSettings
+        frm.Caption = "Timeline Type"
+        frm.Show
+        If frm.Tag <> "OK" Then Unload frm: Exit Sub
+        timelineType = frm.timelineType
+        timelineColor = frm.timelineColor
+        Unload frm
+    End If
 
     Dim allowGaps As Boolean, allowMulti As Boolean, doWipe As Boolean
     allowGaps = (MsgBox("Allow breaks / gaps in the timeline?" & vbCrLf & vbCrLf & _
@@ -309,6 +318,28 @@ Private Function UnitWord(ByVal t As String) As String
     End Select
 End Function
 
+' Guess the most likely unit from the data's granularity.
+Private Function DetectType(ByRef ev() As TLEvent, ByVal n As Long) As String
+    Dim yrs As Object, mos As Object, dys As Object, i As Long
+    Set yrs = CreateObject("Scripting.Dictionary")
+    Set mos = CreateObject("Scripting.Dictionary")
+    Set dys = CreateObject("Scripting.Dictionary")
+    For i = 1 To n
+        yrs(Year(ev(i).RawDate)) = 1
+        mos(Year(ev(i).RawDate) * 100 + Month(ev(i).RawDate)) = 1
+        dys(CLng(Int(CDbl(ev(i).RawDate)))) = 1
+    Next i
+    If yrs.count >= 2 Then
+        DetectType = "Years"
+    ElseIf mos.count >= 2 Then
+        DetectType = "Months"
+    ElseIf dys.count >= 2 Then
+        DetectType = "Days"
+    Else
+        DetectType = "Hours"
+    End If
+End Function
+
 Private Function IntervalCode(ByVal t As String) As String
     Select Case t
         Case "Hours": IntervalCode = "h"
@@ -457,7 +488,6 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
         drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), (ci - 1) * colW, colW, bandBottom, sc, doWipe, animSeq)
     Next ci
 
-    ApplyZOrder sld
     DrawPage = drawn
 End Function
 
@@ -541,17 +571,13 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
     boxW = BOX_WIDTH * sc
     If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
 
-    Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long, lastKey As Double
+    Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long
     cursorY = bandBottom + BAND_GAP * sc
     prevLeft = innerL
-    lastKey = -1
 
     For i = 1 To n
         If ev(i).UnitStart = colUnit Then
-            Dim dateX As Single, boxLeft As Single, dH As Single, descH As Single
-            dH = MaxS(DATE_HEIGHT * sc, MeasureDescHeight(sld, ev(i).DateLabel, boxW, "Arial", FS_DATE * sc))
-            descH = ev(i).DescH * sc
-
+            Dim dateX As Single, boxLeft As Single, boxesH As Single, grp As Shape
             dateX = innerL + ClampD(ev(i).UnitFrac, 0, 1) * (innerR - innerL)
             boxLeft = dateX - LINE_INSET * sc
             If boxLeft < prevLeft Then boxLeft = prevLeft
@@ -559,107 +585,30 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
             If boxLeft < innerL Then boxLeft = innerL
             prevLeft = boxLeft
 
-            animSeq = animSeq + 1
-            Dim grp As Shape, ln As Shape
-            Set grp = PlaceEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, dH, descH, sc, animSeq)
-
-            If ev(i).SortKey <> lastKey Then
-                Set ln = DrawLeaderLine(sld, dateX, bandBottom, cursorY + dH / 2, animSeq)
-            End If
-            lastKey = ev(i).SortKey
-
+            ' the real Make-Entry creator: one group, exact naming, black entry text,
+            ' with a date-accurate leader line from the band bottom.
+            Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, _
+                                          dateX, bandBottom, True, sc, boxesH)
+            grp.Tags.Add "TLENTRY", "1"
             If doWipe Then
+                animSeq = animSeq + 1
                 AddWipe sld, grp, True
-                If Not ln Is Nothing Then AddWipe sld, ln, False
             End If
-            Set ln = Nothing
 
-            cursorY = cursorY + dH + descH + ROW_GAP * sc
+            cursorY = cursorY + boxesH + ROW_GAP * sc
             drawn = drawn + 1
         End If
     Next i
     DrawColumn = drawn
 End Function
 
-' A Make-Entry-style entry: navy date box + white entry box, GroupStyle-tagged,
-' grouped, drop-shadowed. (The date-accurate LeadingLine is added separately.)
-Private Function PlaceEntry(ByVal sld As slide, ByVal dateText As String, ByVal descText As String, _
-                            ByVal boxLeft As Single, ByVal boxTop As Single, ByVal boxW As Single, _
-                            ByVal dH As Single, ByVal descH As Single, ByVal sc As Single, _
-                            ByVal idx As Long) As Shape
-    Dim db As Shape, eb As Shape, grp As Shape
-    Set db = sld.Shapes.AddShape(msoShapeRectangle, boxLeft, boxTop, boxW, dH)
-    StyleBox db, NAVY(), WHITE(), dateText, "Arial", FS_DATE * sc, True, True
-    db.line.ForeColor.RGB = RGB(0, 0, 0)
-    db.TextFrame.WordWrap = msoTrue
-    db.Tags.Add "GroupStyle", "Date Box"
-    db.Name = SHAPE_PREFIX & "_Date_" & idx
-
-    Set eb = sld.Shapes.AddShape(msoShapeRectangle, boxLeft, boxTop + dH, boxW, descH)
-    StyleBox eb, WHITE(), NAVY(), descText, "Arial", FS_DESC * sc, False, False
-    eb.line.ForeColor.RGB = RGB(0, 0, 0)
-    eb.TextFrame.WordWrap = msoTrue
-    eb.TextFrame2.VerticalAnchor = msoAnchorTop
-    eb.Tags.Add "GroupStyle", "Entry Box"
-    eb.Name = SHAPE_PREFIX & "_Desc_" & idx
-
-    Set grp = sld.Shapes.Range(Array(db.Name, eb.Name)).Group
-    grp.Name = SHAPE_PREFIX & "_Entry_" & idx
-    With grp.Shadow
-        .Visible = msoTrue
-        .Type = msoShadow21
-        .IncrementOffsetX 3
-        .IncrementOffsetY 3
-    End With
-    Set PlaceEntry = grp
-End Function
-
-Private Function DrawLeaderLine(ByVal sld As slide, ByVal x As Single, ByVal y1 As Single, _
-                               ByVal y2 As Single, ByVal idx As Long) As Shape
-    Dim ln As Shape
-    Set ln = sld.Shapes.AddLine(x, y1, x, y2)
-    ln.line.ForeColor.RGB = RGB(0, 0, 0)
-    ln.line.Weight = BORDER_PT
-    ln.Name = "LeadingLine" & Format$(idx, "00") & "_" & SHAPE_PREFIX
-    ln.ZOrder msoSendToBack
-    Set DrawLeaderLine = ln
-End Function
-
-Private Sub StyleBox(ByVal sh As Shape, ByVal fill As Long, ByVal txtOrBorder As Long, _
-                     ByVal text As String, ByVal fName As String, ByVal fSize As Single, _
-                     ByVal bold As Boolean, ByVal centered As Boolean)
-    sh.fill.ForeColor.RGB = fill
-    sh.line.ForeColor.RGB = NAVY()
-    sh.line.Weight = BORDER_PT
-    With sh.TextFrame
-        .MarginLeft = 4: .MarginRight = 4: .MarginTop = 2: .MarginBottom = 2
-        With .TextRange
-            .text = text
-            .Font.Name = fName
-            .Font.Size = fSize
-            .Font.bold = IIf(bold, msoTrue, msoFalse)
-            If fill = NAVY() Then .Font.Color.RGB = WHITE() Else .Font.Color.RGB = NAVY()
-            .ParagraphFormat.Alignment = IIf(centered, ppAlignCenter, ppAlignLeft)
-        End With
-        .VerticalAnchor = msoAnchorMiddle
-    End With
-End Sub
-
-' Top-to-bottom wipe entrance (#6). LeadingLines come in with the entry.
+' Top-to-bottom wipe entrance (#6). The LeadingLine comes in with the entry group.
 Private Sub AddWipe(ByVal sld As slide, ByVal shp As Shape, ByVal firstOfCard As Boolean)
     On Error Resume Next
     Dim eff As Effect, trig As Long
     trig = IIf(firstOfCard, msoAnimTriggerOnPageClick, msoAnimTriggerWithPrevious)
     Set eff = sld.TimeLine.MainSequence.AddEffect(shp, msoAnimEffectWipe, , trig)
     eff.EffectParameters.Direction = msoAnimDirectionTop
-End Sub
-
-' Send all leader lines behind everything else (z-order, without naming the band).
-Private Sub ApplyZOrder(ByVal sld As slide)
-    Dim shp As Shape
-    For Each shp In sld.Shapes
-        If shp.Name Like "LeadingLine*" Then shp.ZOrder msoSendToBack
-    Next shp
 End Sub
 
 ' ============================================================================
@@ -698,8 +647,8 @@ End Function
 Private Sub ClearPriorOutput(ByVal sld As slide)
     Dim i As Long
     For i = sld.Shapes.count To 1 Step -1
-        If (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Or (sld.Shapes(i).Name = "BottomBar") _
-           Or (sld.Shapes(i).Name Like "LeadingLine*" & SHAPE_PREFIX) Then sld.Shapes(i).Delete
+        If (sld.Shapes(i).Tags("TLENTRY") = "1") Or (sld.Shapes(i).Name = "BottomBar") _
+           Or (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Then sld.Shapes(i).Delete
     Next i
     Dim s As Long
     For s = ActivePresentation.Slides.count To 1 Step -1
