@@ -571,11 +571,21 @@ End Sub
 ' Subtract the tear freeform from a cell's edge (cell stays primary -> keeps fill + text).
 Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal isTearA As Boolean, _
                       ByVal boundaryX As Single, ByVal sc As Single)
-    Dim tear As Shape
+    Dim tear As Shape, shp As Shape, before As Object
     On Error GoTo Bail
+    ' snapshot existing names so we can find the merged result afterwards
+    Set before = CreateObject("Scripting.Dictionary")
+    For Each shp In sld.Shapes
+        before(shp.Name) = 1
+    Next shp
     Set tear = BuildTear(sld, isTearA, boundaryX, sc)
     tear.Name = "TLTear_tmp"
+    before("TLTear_tmp") = 1
     sld.Shapes.Range(Array(cellName, "TLTear_tmp")).MergeShapes msoMergeSubtract, sld.Shapes(cellName)
+    ' MergeShapes renames the result -> restore the cell name so grouping still works
+    For Each shp In sld.Shapes
+        If Not before.Exists(shp.Name) Then shp.Name = cellName: Exit For
+    Next shp
     Exit Sub
 Bail:
     On Error Resume Next
