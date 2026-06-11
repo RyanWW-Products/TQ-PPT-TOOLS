@@ -713,6 +713,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
             Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, _
                                           dateX, bandBottom, True, sc, boxesH)
             grp.Tags.Add "TLENTRY", "1"
+            grp.ZOrder msoSendToBack        ' earlier (upper) entries stay on top -> leader lines tuck behind the boxes above
             If doWipe Then
                 animSeq = animSeq + 1
                 AddWipe sld, grp, True

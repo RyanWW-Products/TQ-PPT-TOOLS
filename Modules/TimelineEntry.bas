@@ -51,6 +51,18 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         End With
     End With
     oDateBox.Tags.Add "GroupStyle", "Date Box"
+    ' best-effort drop shadow on the date (header) text
+    On Error Resume Next
+    With oDateBox.TextFrame2.TextRange.Font.Shadow
+        .Visible = msoTrue
+        .Style = msoShadowStyleOuterShadow
+        .Blur = 3
+        .Transparency = 0.5
+        .Size = 100
+        .OffsetX = 1.5
+        .OffsetY = 1.5
+    End With
+    On Error GoTo 0
 
     ' Entry box (white fill, BLACK text)
     Set oEntryBox = oSlide.Shapes.AddTextbox(msoTextOrientationHorizontal, oDateBox.Left, _
