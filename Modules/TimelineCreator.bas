@@ -790,9 +790,9 @@ End Sub
 Private Function PickExcelFile() As String
     Dim fd As FileDialog
     Set fd = Application.FileDialog(msoFileDialogFilePicker)
-    fd.Title = "Select your timeline spreadsheet"
+    fd.Title = "Select your timeline file (Excel or CSV)"
     fd.Filters.Clear
-    fd.Filters.Add "Excel files", "*.xlsx; *.xlsm; *.xls"
+    fd.Filters.Add "Timeline data (Excel / CSV)", "*.xlsx; *.xlsm; *.xls; *.csv"
     fd.AllowMultiSelect = False
     If fd.Show = -1 Then PickExcelFile = fd.SelectedItems(1)
 End Function
