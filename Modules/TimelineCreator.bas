@@ -1288,3 +1288,115 @@ Private Sub CopyToClipboard(ByVal s As String)
     dobj.SetText s
     dobj.PutInClipboard
 End Sub
+
+' ============================================================================
+' SPACE EVENLY WITH LEADERS
+' ============================================================================
+' Distribute the selected entries with EQUAL GAPS, measured on their BOX bounds
+' only (the leader lines are ignored so they can't skew the spacing the way
+' PowerPoint's native Distribute does). Each whole entry - box + leader - moves
+' together. Axis is auto-chosen as the one the boxes are more spread along.
+Public Sub SpaceEntriesEvenly(control As IRibbonControl)
+    On Error GoTo Fail
+    If ActiveWindow.Selection.Type <> ppSelectionShapes Then
+        MsgBox "Select the entries you want to space (at least 3).", vbExclamation, "Space Evenly with Leaders"
+        Exit Sub
+    End If
+    Dim sr As ShapeRange
+    Set sr = ActiveWindow.Selection.ShapeRange
+    Dim cnt As Long
+    cnt = sr.count
+    If cnt < 3 Then
+        MsgBox "Select at least 3 entries to space them evenly.", vbExclamation, "Space Evenly with Leaders"
+        Exit Sub
+    End If
+
+    Dim bTop() As Single, bLeft() As Single, bH() As Single, bW() As Single, idx() As Long
+    ReDim bTop(1 To cnt): ReDim bLeft(1 To cnt): ReDim bH(1 To cnt): ReDim bW(1 To cnt): ReDim idx(1 To cnt)
+    Dim i As Long, topY As Single, leftX As Single, botY As Single, rgtX As Single
+    For i = 1 To cnt
+        BoxRectOf sr(i), topY, leftX, botY, rgtX
+        bTop(i) = topY: bLeft(i) = leftX: bH(i) = botY - topY: bW(i) = rgtX - leftX
+        idx(i) = i
+    Next i
+
+    ' choose the axis the boxes are more spread along
+    Dim minT As Single, maxB As Single, minL As Single, maxR As Single
+    minT = bTop(1): maxB = bTop(1) + bH(1): minL = bLeft(1): maxR = bLeft(1) + bW(1)
+    For i = 2 To cnt
+        If bTop(i) < minT Then minT = bTop(i)
+        If bTop(i) + bH(i) > maxB Then maxB = bTop(i) + bH(i)
+        If bLeft(i) < minL Then minL = bLeft(i)
+        If bLeft(i) + bW(i) > maxR Then maxR = bLeft(i) + bW(i)
+    Next i
+    Dim vertical As Boolean
+    vertical = ((maxB - minT) >= (maxR - minL))
+
+    ' sort idx() by box position along the chosen axis (insertion sort)
+    Dim a As Long, keyIdx As Long, pa As Single, pb As Single
+    For a = 2 To cnt
+        keyIdx = idx(a): i = a - 1
+        Do While i >= 1
+            If vertical Then
+                pa = bTop(idx(i)): pb = bTop(keyIdx)
+            Else
+                pa = bLeft(idx(i)): pb = bLeft(keyIdx)
+            End If
+            If pa <= pb Then Exit Do
+            idx(i + 1) = idx(i): i = i - 1
+        Loop
+        idx(i + 1) = keyIdx
+    Next a
+
+    ' equal-gap distribution; move each whole entry so its BOX lands on target
+    Dim sumSize As Single, gap As Single, cursor As Single, j As Long
+    sumSize = 0
+    For i = 1 To cnt
+        If vertical Then sumSize = sumSize + bH(idx(i)) Else sumSize = sumSize + bW(idx(i))
+    Next i
+    If vertical Then
+        gap = ((maxB - minT) - sumSize) / (cnt - 1)
+        cursor = minT
+    Else
+        gap = ((maxR - minL) - sumSize) / (cnt - 1)
+        cursor = minL
+    End If
+    For i = 1 To cnt
+        j = idx(i)
+        If vertical Then
+            sr(j).Top = sr(j).Top + (cursor - bTop(j))
+            cursor = cursor + bH(j) + gap
+        Else
+            sr(j).Left = sr(j).Left + (cursor - bLeft(j))
+            cursor = cursor + bW(j) + gap
+        End If
+    Next i
+    Exit Sub
+Fail:
+    MsgBox "Space Evenly failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Space Evenly with Leaders"
+End Sub
+
+' Bounding rect of an entry's BOX portion (every child except the LeadingLine);
+' falls back to the whole shape if it isn't a group or has only a leader.
+Private Sub BoxRectOf(ByVal shp As Shape, ByRef topY As Single, ByRef leftX As Single, _
+                      ByRef botY As Single, ByRef rgtX As Single)
+    Dim it As Shape, got As Boolean
+    If shp.Type = msoGroup Then
+        For Each it In shp.GroupItems
+            If Not (it.Name Like "LeadingLine*") Then
+                If Not got Then
+                    topY = it.Top: leftX = it.Left: botY = it.Top + it.Height: rgtX = it.Left + it.Width
+                    got = True
+                Else
+                    If it.Top < topY Then topY = it.Top
+                    If it.Left < leftX Then leftX = it.Left
+                    If it.Top + it.Height > botY Then botY = it.Top + it.Height
+                    If it.Left + it.Width > rgtX Then rgtX = it.Left + it.Width
+                End If
+            End If
+        Next it
+    End If
+    If Not got Then
+        topY = shp.Top: leftX = shp.Left: botY = shp.Top + shp.Height: rgtX = shp.Left + shp.Width
+    End If
+End Sub
