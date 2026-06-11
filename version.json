@@ -1,5 +1,5 @@
 {
-  "addinVersion": "5.4.8",
+  "addinVersion": "5.5.1",
   "assetsVersion": 1,
-  "notes": "Ribbon: dropdowns for Macros + Timeline formats."
+  "notes": "Timeline Creator: import an Excel timeline as a DateBar band with real Make-Entry entries, type auto-suggest, and a torn bar at gaps. Calendar: single month or a range."
 }
