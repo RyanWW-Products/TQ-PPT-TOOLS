@@ -41,6 +41,11 @@ Private Const MIN_SCALE     As Single = 0.55
 Private Const BORDER_PT     As Single = 1.5
 Private Const MAX_COLS      As Long = 75        ' PowerPoint table / practical column ceiling
 
+' ---- Weighted timeline (tiered, proportional column widths) -----------------
+Private Const TIER_REL_THRESH As Single = 0.5   ' a tier break needs a >=50% relative jump...
+Private Const TIER_ABS_GATE   As Single = 0.3   ' ...AND the jump must be >=30% of the full count range
+Private Const TIER_MIN_FRAC   As Single = 0.14  ' a column is never thinner than ~14% (auto-backs off when many cols)
+
 ' ---- Event record (Type MUST sit before any procedure) ---------------------
 Private Type TLEvent
     SortKey   As Double
@@ -112,7 +117,7 @@ Public Sub BuildTimeline(control As IRibbonControl)
         Unload frm
     End If
 
-    Dim allowGaps As Boolean, allowMulti As Boolean, doWipe As Boolean
+    Dim allowGaps As Boolean, allowMulti As Boolean, doWipe As Boolean, allowWeighted As Boolean
     allowGaps = (MsgBox("Allow breaks / gaps in the timeline?" & vbCrLf & vbCrLf & _
                  "Yes = compact (only units that have entries)" & vbCrLf & _
                  "No  = continuous (every " & LCase$(UnitWord(timelineType)) & " from first to last)", _
@@ -121,8 +126,28 @@ Public Sub BuildTimeline(control As IRibbonControl)
                  vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
     doWipe = (MsgBox("Add a top-to-bottom wipe entrance to each entry (on click)?", _
                  vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
+    allowWeighted = (MsgBox("Weight column widths by how many events each " & _
+                 LCase$(UnitWord(timelineType)) & " has?" & vbCrLf & vbCrLf & _
+                 "Yes = busier units get wider columns (tiered)" & vbCrLf & _
+                 "No  = every column the same width", _
+                 vbYesNo + vbQuestion, "Timeline Creator") = vbYes)
 
-    ' Assign each event to its unit, and validate the column count
+    Dim summary As String
+    If RenderTimeline(sld, events, n, timelineType, timelineColor, allowGaps, _
+                      allowMulti, doWipe, allowWeighted, summary) Then ReportSummary summary, errLog
+    Exit Sub
+Fail:
+    MsgBox "Timeline build failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Timeline Creator"
+End Sub
+
+' Shared render: assign units, build columns, clear, draw, and stash the source on
+' the slide so "Toggle Weighted Timeline" can re-flow it without re-importing.
+' Returns False (with its own message) if the column count exceeds the limit.
+Private Function RenderTimeline(ByVal sld As slide, ByRef events() As TLEvent, ByVal n As Long, _
+                               ByVal timelineType As String, ByVal timelineColor As String, _
+                               ByVal allowGaps As Boolean, ByVal allowMulti As Boolean, _
+                               ByVal doWipe As Boolean, ByVal allowWeighted As Boolean, _
+                               ByRef summary As String) As Boolean
     Dim i As Long
     For i = 1 To n
         events(i).UnitStart = UnitStartOf(events(i).RawDate, timelineType)
@@ -136,18 +161,16 @@ Public Sub BuildTimeline(control As IRibbonControl)
                "above the limit of " & MAX_COLS & "." & vbCrLf & vbCrLf & _
                "Choose a coarser unit (e.g. Months instead of Days), or turn ON " & _
                """Allow breaks / gaps"" to compact it.", vbExclamation, "Timeline Creator"
-        Exit Sub
+        RenderTimeline = False
+        Exit Function
     End If
 
     ClearPriorOutput sld
-
-    Dim summary As String
-    summary = DrawTimeline(sld, events, n, cols, nCols, timelineType, timelineColor, allowMulti, doWipe)
-    ReportSummary summary, errLog
-    Exit Sub
-Fail:
-    MsgBox "Timeline build failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Timeline Creator"
-End Sub
+    summary = DrawTimeline(sld, events, n, cols, nCols, timelineType, timelineColor, _
+                           allowMulti, doWipe, allowWeighted)
+    StoreTimelineState sld, events, n, timelineType, timelineColor, allowGaps, allowMulti, doWipe, allowWeighted
+    RenderTimeline = True
+End Function
 
 ' ============================================================================
 ' READ + PARSE
@@ -414,7 +437,8 @@ End Function
 Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, ByVal n As Long, _
                               ByRef cols() As Date, ByVal nCols As Long, _
                               ByVal t As String, ByVal barColor As String, _
-                              ByVal allowMulti As Boolean, ByVal doWipe As Boolean) As String
+                              ByVal allowMulti As Boolean, ByVal doWipe As Boolean, _
+                              ByVal allowWeighted As Boolean) As String
     Dim sw As Single, sh As Single
     sw = firstSlide.parent.PageSetup.slideWidth
     sh = firstSlide.parent.PageSetup.slideHeight
@@ -444,7 +468,7 @@ Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, 
         ReDim pageCols(1 To pn)
         For k = 1 To pn: pageCols(k) = cols(startCol + k): Next k
         If p > 1 Then Set sld = NewPageSlide(firstSlide)
-        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, overflowMsg)
+        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, allowWeighted, overflowMsg)
     Next p
 
     DrawTimeline = "Events drawn: " & drawn & " of " & n & vbCrLf & _
@@ -454,18 +478,41 @@ End Function
 Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
                           ByRef pageCols() As Date, ByVal pn As Long, ByVal t As String, _
                           ByVal barColor As String, ByVal sw As Single, ByVal sh As Single, _
-                          ByVal doWipe As Boolean, ByRef overflowMsg As String) As Long
-    Dim colW As Single, availH As Single
-    colW = sw / pn                                  ' full slide width (#3)
+                          ByVal doWipe As Boolean, ByVal allowWeighted As Boolean, _
+                          ByRef overflowMsg As String) As Long
+    Dim availH As Single
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
+    ' tallest stacked column (for vertical autofit) + event count per column (for weighting)
     Dim ci As Long, maxH As Single, colH As Single, i As Long
+    Dim cnt() As Long
+    ReDim cnt(1 To pn)
     For ci = 1 To pn
         colH = 0
         For i = 1 To n
-            If ev(i).UnitStart = pageCols(ci) Then colH = colH + DATE_HEIGHT + ev(i).DescH + ROW_GAP
+            If ev(i).UnitStart = pageCols(ci) Then
+                colH = colH + DATE_HEIGHT + ev(i).DescH + ROW_GAP
+                cnt(ci) = cnt(ci) + 1
+            End If
         Next i
         If colH > maxH Then maxH = colH
+    Next ci
+
+    ' per-column width (fraction of slide width): uniform, or tiered-by-count when weighted.
+    ' Build cumulative left edges so every downstream X is a lookup, not (ci-1)*colW.
+    Dim frac() As Single, colWArr() As Single, colLArr() As Single, acc As Single
+    ReDim colWArr(1 To pn): ReDim colLArr(1 To pn)
+    If allowWeighted Then
+        ColumnWeights cnt, pn, frac
+    Else
+        ReDim frac(1 To pn)
+        For ci = 1 To pn: frac(ci) = 1! / pn: Next ci
+    End If
+    acc = 0
+    For ci = 1 To pn
+        colWArr(ci) = frac(ci) * sw
+        colLArr(ci) = acc
+        acc = acc + colWArr(ci)
     Next ci
 
     Dim sc As Single
@@ -481,11 +528,11 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
     Dim bandBottom As Single
     bandBottom = BAND_TOP + BAND_HEIGHT * sc
 
-    DrawBar sld, pageCols, pn, colW, sc, t, barColor
+    DrawBar sld, pageCols, pn, colWArr, colLArr, sc, t, barColor
 
     Dim drawn As Long, animSeq As Long
     For ci = 1 To pn
-        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), (ci - 1) * colW, colW, bandBottom, sc, doWipe, animSeq)
+        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq)
     Next ci
 
     DrawPage = drawn
@@ -493,22 +540,24 @@ End Function
 
 ' The DateBar-style band: gradient cell per column, grouped + named "BottomBar".
 Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Long, _
-                    ByVal colW As Single, ByVal sc As Single, ByVal t As String, ByVal barColor As String)
+                    ByRef colWArr() As Single, ByRef colLArr() As Single, ByVal sc As Single, _
+                    ByVal t As String, ByVal barColor As String)
     Dim cellNames() As String, ci As Long, sh As Shape, isGreen As Boolean
     isGreen = (LCase$(barColor) = "green")
     ReDim cellNames(1 To pn)
     For ci = 1 To pn
-        Set sh = sld.Shapes.AddShape(msoShapeRectangle, (ci - 1) * colW, BAND_TOP, colW, BAND_HEIGHT * sc)
+        Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLArr(ci), BAND_TOP, colWArr(ci), BAND_HEIGHT * sc)
         StyleBandCell sh, GetSegmentLabel(t, pageCols(ci)), sc, isGreen
         sh.Name = SHAPE_PREFIX & "_BandCell_" & ci & "_" & sld.SlideIndex
         cellNames(ci) = sh.Name
     Next ci
 
     ' Tear cells adjacent to a gap (compact mode only; contiguous has no gaps).
+    ' boundaryX = the shared edge between column ci and ci+1 = colLArr(ci+1).
     For ci = 1 To pn - 1
         If DateAdd(IntervalCode(t), 1, pageCols(ci)) <> pageCols(ci + 1) Then
-            ApplyTear sld, cellNames(ci), True, ci * colW, sc       ' TearA: left cell's right edge
-            ApplyTear sld, cellNames(ci + 1), False, ci * colW, sc  ' TearB (rot 180): right cell's left edge
+            ApplyTear sld, cellNames(ci), True, colLArr(ci + 1), sc       ' TearA: left cell's right edge
+            ApplyTear sld, cellNames(ci + 1), False, colLArr(ci + 1), sc  ' TearB (rot 180): right cell's left edge
         End If
     Next ci
 
@@ -570,7 +619,8 @@ End Sub
 
 ' Subtract the tear freeform from a cell's edge (cell stays primary -> keeps fill + text).
 Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal isTearA As Boolean, _
-                      ByVal boundaryX As Single, ByVal sc As Single)
+                      ByVal boundaryX As Single, ByVal sc As Single, _
+                      Optional ByVal bandTop As Single = BAND_TOP)
     Dim tear As Shape, shp As Shape, before As Object
     On Error GoTo Bail
     ' snapshot existing names so we can find the merged result afterwards
@@ -578,7 +628,7 @@ Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal isTear
     For Each shp In sld.Shapes
         before(shp.Name) = 1
     Next shp
-    Set tear = BuildTear(sld, isTearA, boundaryX, sc)
+    Set tear = BuildTear(sld, isTearA, boundaryX, sc, bandTop)
     tear.Name = "TLTear_tmp"
     before("TLTear_tmp") = 1
     sld.Shapes.Range(Array(cellName, "TLTear_tmp")).MergeShapes msoMergeSubtract, sld.Shapes(cellName)
@@ -598,11 +648,12 @@ End Sub
 ' and rotate the shape 180 to match. Node coords are normalized 0..1 of the shape box;
 ' offsets/sizes/rotation come from the example (authored for a 30pt-tall cell).
 Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
-                           ByVal boundaryX As Single, ByVal sc As Single) As Shape
+                           ByVal boundaryX As Single, ByVal sc As Single, _
+                           Optional ByVal bandTop As Single = BAND_TOP) As Shape
     Dim ff As FreeformBuilder, sh As Shape, L As Single, T As Single, w As Single, h As Single
     If isTearA Then
         w = 29.2 * sc: h = 61.9 * sc
-        L = boundaryX - 11 * sc: T = BAND_TOP - 16.1 * sc
+        L = boundaryX - 11 * sc: T = bandTop - 16.1 * sc
         Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5739 * w, T)
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.6106 * h
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6717 * w, T + 0.6106 * h
@@ -615,7 +666,7 @@ Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
         Set BuildTear = ff.ConvertToShape
     Else
         w = 26.9 * sc: h = 57.8 * sc
-        L = boundaryX - 18.1 * sc: T = BAND_TOP - 9 * sc
+        L = boundaryX - 18.1 * sc: T = bandTop - 9 * sc
         Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5522 * w, T)
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.5828 * h
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6443 * w, T + 0.5828 * h
@@ -641,6 +692,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
     innerR = colLeft + colW - COL_PAD
     boxW = BOX_WIDTH * sc
     If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
+    If boxW < 1 Then boxW = 1                        ' narrow weighted columns must stay positive
 
     Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long
     cursorY = bandBottom + BAND_GAP * sc
@@ -793,3 +845,264 @@ End Function
 Private Function MaxS(ByVal a As Single, ByVal b As Single) As Single
     If a > b Then MaxS = a Else MaxS = b
 End Function
+
+' ============================================================================
+' WEIGHTED TIMELINE  -  tiered, proportional column widths
+' ============================================================================
+' Group columns into up to 3 size tiers by the GAPS in their event counts
+' (roughly-equal counts share a tier + a width), weight each tier by its MEAN
+' count (so a severe split makes the busy tier dominate), then enforce an
+' order-preserving minimum width. Fills frac() (sums to 1).
+Private Sub ColumnWeights(ByRef cnt() As Long, ByVal pn As Long, ByRef frac() As Single)
+    ReDim frac(1 To pn)
+    Dim i As Long
+    If pn <= 1 Then
+        If pn = 1 Then frac(1) = 1!
+        Exit Sub
+    End If
+
+    ' all-equal -> one uniform tier
+    Dim allEq As Boolean
+    allEq = True
+    For i = 2 To pn
+        If cnt(i) <> cnt(1) Then allEq = False: Exit For
+    Next i
+    If allEq Then
+        For i = 1 To pn: frac(i) = 1! / pn: Next i
+        Exit Sub
+    End If
+
+    ' sort column indices ascending by count (carry original index in ord)
+    Dim ord() As Long, a As Long, b As Long, keyi As Long
+    ReDim ord(1 To pn)
+    For i = 1 To pn: ord(i) = i: Next i
+    For a = 2 To pn
+        keyi = ord(a): b = a - 1
+        Do While b >= 1
+            If cnt(ord(b)) <= cnt(keyi) Then Exit Do
+            ord(b + 1) = ord(b): b = b - 1
+        Loop
+        ord(b + 1) = keyi
+    Next a
+    Dim sv() As Long
+    ReDim sv(1 To pn)
+    For i = 1 To pn: sv(i) = cnt(ord(i)): Next i
+
+    ' choose up to 2 tier breaks: a gap must clear BOTH the absolute-range gate and
+    ' the relative-jump threshold; keep the two strongest by relative jump.
+    Dim rng As Single
+    rng = sv(pn) - sv(1): If rng < 1 Then rng = 1
+    Dim bi1 As Long, bi2 As Long, bs1 As Single, bs2 As Single
+    bi1 = 0: bi2 = 0: bs1 = 0: bs2 = 0
+    Dim cur As Single, relG As Single, absF As Single
+    For i = 1 To pn - 1
+        cur = sv(i): If cur < 1 Then cur = 1
+        relG = (sv(i + 1) - cur) / cur
+        absF = (sv(i + 1) - sv(i)) / rng
+        If absF >= TIER_ABS_GATE And relG >= TIER_REL_THRESH Then
+            If relG > bs1 Then
+                bs2 = bs1: bi2 = bi1: bs1 = relG: bi1 = i
+            ElseIf relG > bs2 Then
+                bs2 = relG: bi2 = i
+            End If
+        End If
+    Next i
+
+    ' walk sorted order assigning tier rank, incrementing after each chosen break
+    Dim tier() As Long, tr As Long
+    ReDim tier(1 To pn)
+    tr = 0
+    For i = 1 To pn
+        tier(i) = tr
+        If (bi1 > 0 And i = bi1) Or (bi2 > 0 And i = bi2) Then tr = tr + 1
+    Next i
+    Dim numT As Long
+    numT = tr + 1
+
+    ' tier weight = mean count of its members (proportional -> dramatic on severe splits)
+    Dim tsum() As Double, tnum() As Long
+    ReDim tsum(0 To numT - 1): ReDim tnum(0 To numT - 1)
+    For i = 1 To pn
+        tsum(tier(i)) = tsum(tier(i)) + sv(i)
+        tnum(tier(i)) = tnum(tier(i)) + 1
+    Next i
+
+    Dim w() As Single, tot As Single
+    ReDim w(1 To pn)
+    For i = 1 To pn
+        w(ord(i)) = tsum(tier(i)) / tnum(tier(i))    ' map tier weight back to original column order
+    Next i
+    tot = 0
+    For i = 1 To pn: tot = tot + w(i): Next i
+    For i = 1 To pn: frac(i) = w(i) / tot: Next i
+
+    ApplyMinFloor frac, pn
+End Sub
+
+' Raise any column below the (capacity-aware) minimum up to it, taking the shortfall
+' proportionally from the columns above the minimum -> ordering and within-tier
+' equality are preserved.
+Private Sub ApplyMinFloor(ByRef frac() As Single, ByVal pn As Long)
+    Dim effMin As Single, i As Long, deficit As Single, excess As Single, takeRatio As Single
+    effMin = TIER_MIN_FRAC
+    If 0.6! / pn < effMin Then effMin = 0.6! / pn    ' back off when many columns
+    For i = 1 To pn
+        If frac(i) < effMin Then
+            deficit = deficit + (effMin - frac(i))
+        Else
+            excess = excess + (frac(i) - effMin)
+        End If
+    Next i
+    If deficit <= 0! Or excess <= 0! Then Exit Sub
+    takeRatio = deficit / excess
+    If takeRatio > 1! Then takeRatio = 1!
+    For i = 1 To pn
+        If frac(i) < effMin Then
+            frac(i) = effMin
+        Else
+            frac(i) = frac(i) - (frac(i) - effMin) * takeRatio
+        End If
+    Next i
+End Sub
+
+' ============================================================================
+' TIMELINE EDITS  (ribbon: Tear Gap, Toggle Weighted Timeline)
+' ============================================================================
+' Tear one edge of the SELECTED shape: build the tear scaled to the shape's height
+' and boolean-subtract it (the shape keeps its fill / text / name). Reuses the
+' timeline tear via ApplyTear's optional bandTop anchor.
+Public Sub TearGap(control As IRibbonControl)
+    On Error GoTo Fail
+    If ActiveWindow.Selection.Type <> ppSelectionShapes Then
+        MsgBox "Select one shape to tear first.", vbExclamation, "Tear Gap": Exit Sub
+    End If
+    If ActiveWindow.Selection.ShapeRange.count <> 1 Then
+        MsgBox "Select exactly one shape.", vbExclamation, "Tear Gap": Exit Sub
+    End If
+    Dim shp As Shape, sld As slide
+    Set shp = ActiveWindow.Selection.ShapeRange(1)
+    Set sld = shp.Parent
+
+    Select Case shp.Type        ' boolean ops need a real geometric shape
+        Case msoPicture, msoLinkedPicture, msoGroup, msoPlaceholder, msoChart, msoTable, msoSmartArt, msoEmbeddedOLEObject, msoLinkedOLEObject
+            MsgBox "That shape can't be torn - pictures, groups, tables, placeholders and charts can't be boolean-subtracted." & vbCrLf & vbCrLf & _
+                   "Use an autoshape, a text box, or a Table-to-Object cell.", vbExclamation, "Tear Gap": Exit Sub
+    End Select
+    If shp.Rotation <> 0 Then
+        MsgBox "Rotated shapes aren't supported (the tear uses the bounding-box edge). Set rotation to 0 first.", _
+               vbExclamation, "Tear Gap": Exit Sub
+    End If
+
+    Dim ans As VbMsgBoxResult
+    ans = MsgBox("Tear which side of the shape?" & vbCrLf & vbCrLf & _
+                 "Yes = LEFT edge" & vbCrLf & "No  = RIGHT edge", _
+                 vbYesNoCancel + vbQuestion, "Tear Gap")
+    If ans = vbCancel Then Exit Sub
+
+    Dim isTearA As Boolean, boundaryX As Single
+    If ans = vbYes Then
+        isTearA = False: boundaryX = shp.Left                 ' TearB (rot 180) cuts a LEFT edge
+    Else
+        isTearA = True: boundaryX = shp.Left + shp.Width       ' TearA cuts a RIGHT edge
+    End If
+
+    ApplyTear sld, shp.Name, isTearA, boundaryX, shp.Height / BAND_HEIGHT, shp.Top
+    Exit Sub
+Fail:
+    MsgBox "Tear Gap failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Tear Gap"
+End Sub
+
+' Re-flow the timeline on the slide with weighting flipped, from the source data
+' stashed at build time (no re-import, no hand-moving the torn band).
+Public Sub ToggleWeightedTimeline(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim sld As slide
+    Set sld = FindTimelineSlide()
+    If sld Is Nothing Then
+        MsgBox "No imported timeline found to toggle." & vbCrLf & vbCrLf & _
+               "Create one with Make Timeline first (weighting can also be chosen at creation).", _
+               vbExclamation, "Weighted Timeline": Exit Sub
+    End If
+
+    Dim ev() As TLEvent, n As Long, t As String, color As String
+    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
+    If Not LoadTimelineState(sld, ev, n, t, color, gaps, multi, wipe, weighted) Then
+        MsgBox "Couldn't read the stored timeline data on this slide.", vbExclamation, "Weighted Timeline": Exit Sub
+    End If
+
+    weighted = Not weighted
+    Dim summary As String
+    If RenderTimeline(sld, ev, n, t, color, gaps, multi, wipe, weighted, summary) Then
+        MsgBox "Weighted timeline turned " & IIf(weighted, "ON", "OFF") & "." & vbCrLf & vbCrLf & summary, _
+               vbInformation, "Weighted Timeline"
+    End If
+    Exit Sub
+Fail:
+    MsgBox "Toggle failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Weighted Timeline"
+End Sub
+
+' --- source/state persistence (slide tags) so the toggle can re-flow in place ----
+Private Sub StoreTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
+                               ByVal t As String, ByVal color As String, ByVal gaps As Boolean, _
+                               ByVal multi As Boolean, ByVal wipe As Boolean, ByVal weighted As Boolean)
+    Dim s As String, i As Long
+    For i = 1 To n        ' strip the delimiter chars from text so records can't collide
+        s = s & CStr(CDbl(ev(i).RawDate)) & Chr(1) _
+              & Replace(Replace(ev(i).DateLabel, Chr(1), ""), Chr(2), "") & Chr(1) _
+              & Replace(Replace(ev(i).Desc, Chr(1), ""), Chr(2), "") & Chr(2)
+    Next i
+    SetTag sld, "TLDATA_EVENTS", s
+    SetTag sld, "TLDATA_N", CStr(n)
+    SetTag sld, "TLDATA_TYPE", t
+    SetTag sld, "TLDATA_COLOR", color
+    SetTag sld, "TLDATA_GAPS", IIf(gaps, "1", "0")
+    SetTag sld, "TLDATA_MULTI", IIf(multi, "1", "0")
+    SetTag sld, "TLDATA_WIPE", IIf(wipe, "1", "0")
+    SetTag sld, "TLDATA_WEIGHTED", IIf(weighted, "1", "0")
+End Sub
+
+Private Function LoadTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, ByRef n As Long, _
+                                  ByRef t As String, ByRef color As String, ByRef gaps As Boolean, _
+                                  ByRef multi As Boolean, ByRef wipe As Boolean, ByRef weighted As Boolean) As Boolean
+    If Len(sld.Tags("TLDATA_N")) = 0 Then Exit Function
+    n = CLng(sld.Tags("TLDATA_N"))
+    If n < 1 Then Exit Function
+    ReDim ev(1 To n)
+    Dim recs() As String, f() As String, i As Long
+    recs = Split(sld.Tags("TLDATA_EVENTS"), Chr(2))
+    If UBound(recs) < n - 1 Then Exit Function       ' record count disagrees with TLDATA_N -> bail cleanly
+    For i = 1 To n
+        f = Split(recs(i - 1), Chr(1))
+        If UBound(f) < 2 Then Exit Function
+        ev(i).RawDate = CDate(CDbl(f(0)))
+        ev(i).DateLabel = f(1)
+        ev(i).Desc = f(2)
+        ev(i).SortKey = CDbl(ev(i).RawDate)
+        ev(i).OrigIndex = i
+    Next i
+    t = sld.Tags("TLDATA_TYPE")
+    color = sld.Tags("TLDATA_COLOR")
+    gaps = (sld.Tags("TLDATA_GAPS") = "1")
+    multi = (sld.Tags("TLDATA_MULTI") = "1")
+    wipe = (sld.Tags("TLDATA_WIPE") = "1")
+    weighted = (sld.Tags("TLDATA_WEIGHTED") = "1")
+    LoadTimelineState = True
+End Function
+
+Private Function FindTimelineSlide() As slide
+    Dim a As slide, s As slide
+    Set a = ActiveTargetSlide()
+    If Not a Is Nothing Then
+        If Len(a.Tags("TLDATA_N")) > 0 Then Set FindTimelineSlide = a: Exit Function
+    End If
+    For Each s In ActivePresentation.Slides
+        If Len(s.Tags("TLDATA_N")) > 0 Then Set FindTimelineSlide = s: Exit Function
+    Next s
+End Function
+
+Private Sub SetTag(ByVal sld As slide, ByVal tagKey As String, ByVal tagVal As String)
+    On Error Resume Next
+    sld.Tags.Delete tagKey
+    On Error GoTo 0
+    sld.Tags.Add tagKey, tagVal
+End Sub

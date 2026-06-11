@@ -29,6 +29,10 @@
              <button id="ButtonC6" label="Swap Month Format" onAction="SwapMonthFormats" image="MonthSwap"/>
              <button id="ButtonC7" label="Day Suffix Toggle" onAction="ToggleDaySuffixes" image="DaySuffix"/>
            </menu>
+           <menu id="MenuTimelineEdits" label="Timeline Edits" size="large" image="TimelineUnlock" supertip="Tear Gap (tear a shape's edge) and Toggle Weighted Timeline (size columns by event count).">
+             <button id="ButtonC9" label="Tear Gap" onAction="TearGap" image="TimelineUnlock" screentip="Tear Gap" supertip="Select one shape, then tear its left or right edge (boolean-subtracts the tear, scaled to the shape's height)."/>
+             <button id="ButtonC10" label="Toggle Weighted Timeline" onAction="ToggleWeightedTimeline" image="TimelineUnlock" screentip="Toggle Weighted Timeline" supertip="Re-flow the current imported timeline: size columns by how many events each unit has, or back to uniform width."/>
+           </menu>
          </group >
          <group id="SampleGroupD" label="Quick Graphics"> 
            <button id="ButtonD1" label="Open Graphics Importer" size="large" onAction="OpenGraphicsImporter" image="QuickGraphics"/> 
