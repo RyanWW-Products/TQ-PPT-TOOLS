@@ -33,9 +33,10 @@ Private Const ROW_GAP       As Single = 22
 Private Const LINE_INSET    As Single = 18
 Private Const COL_PAD       As Single = 8
 Private Const MIN_COL_W     As Single = 132
+Private Const LANE_GAP      As Single = 14        ' horizontal gap between packed lanes within a column
 
 Private Const FS_DATE       As Single = 12
-Private Const FS_DESC       As Single = 10
+Private Const FS_DESC       As Single = 12        ' MUST match CreateTimelineEntry's drawn font (12*scale), or autofit under-measures and columns overflow
 Private Const FS_LABEL      As Single = 14
 Private Const MIN_SCALE     As Single = 0.55
 Private Const BORDER_PT     As Single = 1.5
@@ -319,7 +320,13 @@ End Function
 
 Private Function FormatTime(ByVal v As Variant) As String
     On Error Resume Next
-    If IsDate(v) Then FormatTime = Format$(CDate(v), "h:mm AM/PM") Else FormatTime = CStr(v & "")
+    If IsNumeric(v) Then                       ' Excel/CSV store a clock time as a 0..1 fraction of a day
+        FormatTime = Format$(CDate(CDbl(v)), "h:mm AM/PM")
+    ElseIf IsDate(v) Then
+        FormatTime = Format$(CDate(v), "h:mm AM/PM")
+    Else
+        FormatTime = CStr(v & "")
+    End If
 End Function
 
 Private Sub SortEvents(ByRef ev() As TLEvent, ByVal n As Long)
@@ -488,19 +495,14 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
     Dim availH As Single
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
-    ' tallest stacked column (for vertical autofit) + event count per column (for weighting)
-    Dim ci As Long, maxH As Single, colH As Single, i As Long
+    ' event count per column (drives weighting)
+    Dim ci As Long, i As Long
     Dim cnt() As Long
     ReDim cnt(1 To pn)
     For ci = 1 To pn
-        colH = 0
         For i = 1 To n
-            If ev(i).UnitStart = pageCols(ci) Then
-                colH = colH + DATE_HEIGHT + ev(i).DescH + ROW_GAP
-                cnt(ci) = cnt(ci) + 1
-            End If
+            If ev(i).UnitStart = pageCols(ci) Then cnt(ci) = cnt(ci) + 1
         Next i
-        If colH > maxH Then maxH = colH
     Next ci
 
     ' per-column width (fraction of slide width): uniform, or tiered-by-count when weighted.
@@ -520,6 +522,28 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
         acc = acc + colWArr(ci)
     Next ci
 
+    ' per-column lanes + effective height for vertical autofit. A column that would
+    ' overflow at full size AND is wide enough for more than one box-lane gets packed
+    ' into lanes (column-major by date), shrinking its effective height toward the bar.
+    Dim lanes() As Long, maxH As Single, singleH As Single, effH As Single, lc As Long
+    ReDim lanes(1 To pn)
+    maxH = 0
+    For ci = 1 To pn
+        singleH = 0
+        For i = 1 To n
+            If ev(i).UnitStart = pageCols(ci) Then singleH = singleH + DATE_HEIGHT + ev(i).DescH + ROW_GAP
+        Next i
+        lc = LanesFor(colWArr(ci))
+        If lc > 1 And singleH > availH Then
+            lanes(ci) = lc
+            effH = PackedColHeight(ev, n, pageCols(ci), cnt(ci), lc)
+        Else
+            lanes(ci) = 1
+            effH = singleH
+        End If
+        If effH > maxH Then maxH = effH
+    Next ci
+
     Dim sc As Single
     sc = 1
     If maxH > availH And maxH > 0 Then sc = availH / maxH
@@ -537,7 +561,7 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
 
     Dim drawn As Long, animSeq As Long
     For ci = 1 To pn
-        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq)
+        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq, lanes(ci))
     Next ci
 
     DrawPage = drawn
@@ -687,48 +711,113 @@ Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
     End If
 End Function
 
-' One unit-column of stacked entries with date-accurate leader lines.
+' One unit-column of entries. lanes=1 -> the original date-accurate single stack;
+' lanes>1 -> pack entries into that many box-lanes (column-major by date) so a busy,
+' wide column rises toward the bar instead of running off the bottom of the slide.
 Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
                             ByVal colUnit As Date, ByVal colLeft As Single, ByVal colW As Single, _
                             ByVal bandBottom As Single, ByVal sc As Single, _
-                            ByVal doWipe As Boolean, ByRef animSeq As Long) As Long
-    Dim innerL As Single, innerR As Single, boxW As Single
+                            ByVal doWipe As Boolean, ByRef animSeq As Long, ByVal lanes As Long) As Long
+    Dim innerL As Single, innerR As Single, boxW As Single, drawn As Long, i As Long
+    Dim dateX As Single, boxLeft As Single, boxesH As Single, grp As Shape
+    Dim cursorY As Single, prevLeft As Single
+    Dim nc As Long, laneW As Single, rpl As Long, k As Long, laneIdx As Long, laneCenter As Single
+    Dim laneY() As Single, j As Long
+
     innerL = colLeft + COL_PAD
     innerR = colLeft + colW - COL_PAD
     boxW = BOX_WIDTH * sc
     If boxW > (colW - 2 * COL_PAD) Then boxW = colW - 2 * COL_PAD
     If boxW < 1 Then boxW = 1                        ' narrow weighted columns must stay positive
 
-    Dim cursorY As Single, prevLeft As Single, drawn As Long, i As Long
-    cursorY = bandBottom + BAND_GAP * sc
-    prevLeft = innerL
+    If lanes <= 1 Then
+        ' --- date-accurate single stack (original behavior) ---
+        cursorY = bandBottom + BAND_GAP * sc
+        prevLeft = innerL
+        For i = 1 To n
+            If ev(i).UnitStart = colUnit Then
+                dateX = innerL + ClampD(ev(i).UnitFrac, 0, 1) * (innerR - innerL)
+                boxLeft = dateX - LINE_INSET * sc
+                If boxLeft < prevLeft Then boxLeft = prevLeft
+                If boxLeft > innerR - boxW Then boxLeft = innerR - boxW
+                If boxLeft < innerL Then boxLeft = innerL
+                prevLeft = boxLeft
+                Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, _
+                                              dateX, bandBottom, True, sc, boxesH)
+                grp.Tags.Add "TLENTRY", "1"
+                grp.ZOrder msoSendToBack
+                If doWipe Then
+                    animSeq = animSeq + 1
+                    AddWipe sld, grp, True
+                End If
+                cursorY = cursorY + boxesH + ROW_GAP * sc
+                drawn = drawn + 1
+            End If
+        Next i
+    Else
+        ' --- multi-lane packing (column-major by date); leader line drops at the lane center ---
+        For i = 1 To n
+            If ev(i).UnitStart = colUnit Then nc = nc + 1
+        Next i
+        laneW = (colW - 2 * COL_PAD) / lanes
+        rpl = -Int(-nc / lanes)                     ' ceil(nc / lanes) = rows per lane
+        If rpl < 1 Then rpl = 1
+        ReDim laneY(0 To lanes - 1)
+        For j = 0 To lanes - 1: laneY(j) = bandBottom + BAND_GAP * sc: Next j
+        k = 0
+        For i = 1 To n
+            If ev(i).UnitStart = colUnit Then
+                laneIdx = k \ rpl
+                If laneIdx > lanes - 1 Then laneIdx = lanes - 1
+                laneCenter = innerL + (laneIdx + 0.5) * laneW
+                boxLeft = laneCenter - boxW / 2
+                Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, laneY(laneIdx), boxW, _
+                                              laneCenter, bandBottom, True, sc, boxesH)
+                grp.Tags.Add "TLENTRY", "1"
+                grp.ZOrder msoSendToBack
+                If doWipe Then
+                    animSeq = animSeq + 1
+                    AddWipe sld, grp, True
+                End If
+                laneY(laneIdx) = laneY(laneIdx) + boxesH + ROW_GAP * sc
+                k = k + 1
+                drawn = drawn + 1
+            End If
+        Next i
+    End If
+    DrawColumn = drawn
+End Function
 
+' How many BOX_WIDTH-wide lanes fit across a column of width colW (at least 1).
+Private Function LanesFor(ByVal colW As Single) As Long
+    Dim k As Long
+    k = Int((colW - 2 * COL_PAD + LANE_GAP) / (BOX_WIDTH + LANE_GAP))
+    If k < 1 Then k = 1
+    LanesFor = k
+End Function
+
+' Height of the tallest lane when a column's entries are packed column-major into
+' `lanes` lanes (matches DrawColumn's assignment so the autofit scale is correct).
+Private Function PackedColHeight(ByRef ev() As TLEvent, ByVal n As Long, ByVal colUnit As Date, _
+                                 ByVal nc As Long, ByVal lanes As Long) As Single
+    Dim laneH() As Single, rpl As Long, k As Long, i As Long, laneIdx As Long, mx As Single, j As Long
+    ReDim laneH(0 To lanes - 1)
+    rpl = -Int(-nc / lanes)
+    If rpl < 1 Then rpl = 1
+    k = 0
     For i = 1 To n
         If ev(i).UnitStart = colUnit Then
-            Dim dateX As Single, boxLeft As Single, boxesH As Single, grp As Shape
-            dateX = innerL + ClampD(ev(i).UnitFrac, 0, 1) * (innerR - innerL)
-            boxLeft = dateX - LINE_INSET * sc
-            If boxLeft < prevLeft Then boxLeft = prevLeft
-            If boxLeft > innerR - boxW Then boxLeft = innerR - boxW
-            If boxLeft < innerL Then boxLeft = innerL
-            prevLeft = boxLeft
-
-            ' the real Make-Entry creator: one group, exact naming, black entry text,
-            ' with a date-accurate leader line from the band bottom.
-            Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, _
-                                          dateX, bandBottom, True, sc, boxesH)
-            grp.Tags.Add "TLENTRY", "1"
-            grp.ZOrder msoSendToBack        ' earlier (upper) entries stay on top -> leader lines tuck behind the boxes above
-            If doWipe Then
-                animSeq = animSeq + 1
-                AddWipe sld, grp, True
-            End If
-
-            cursorY = cursorY + boxesH + ROW_GAP * sc
-            drawn = drawn + 1
+            laneIdx = k \ rpl
+            If laneIdx > lanes - 1 Then laneIdx = lanes - 1
+            laneH(laneIdx) = laneH(laneIdx) + DATE_HEIGHT + ev(i).DescH + ROW_GAP
+            k = k + 1
         End If
     Next i
-    DrawColumn = drawn
+    mx = 0
+    For j = 0 To lanes - 1
+        If laneH(j) > mx Then mx = laneH(j)
+    Next j
+    PackedColHeight = mx
 End Function
 
 ' Top-to-bottom wipe entrance (#6). The LeadingLine comes in with the entry group.
