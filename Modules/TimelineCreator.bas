@@ -614,17 +614,17 @@ Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
                     L + 0.4426 * w, T + 0.1894 * h, L + 0.5739 * w, T
         Set BuildTear = ff.ConvertToShape
     Else
-        w = 27.7 * sc: h = 57.8 * sc
+        w = 26.9 * sc: h = 57.8 * sc
         L = boundaryX - 18.1 * sc: T = BAND_TOP - 9 * sc
-        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5644 * w, T)
+        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5522 * w, T)
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.5828 * h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6539 * w, T + 0.5828 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6443 * w, T + 0.5828 * h
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.2919 * w, T + 0.5763 * h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.0948 * w, T + 0.5763 * h
-        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2739 * w, T + 0.3604 * h, _
-                    L + 0.3853 * w, T + 0.2159 * h, L + 0.5644 * w, T
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + 0.9968 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.2722 * w, T + 0.5763 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.0696 * w, T + 0.5763 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2537 * w, T + 0.3604 * h, _
+                    L + 0.3682 * w, T + 0.2159 * h, L + 0.5522 * w, T
         Set sh = ff.ConvertToShape
         sh.Rotation = 180          ' TearB is authored rotated 180 deg in the example
         Set BuildTear = sh
