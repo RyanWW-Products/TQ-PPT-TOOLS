@@ -505,12 +505,10 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
     Next ci
 
     ' Tear cells adjacent to a gap (compact mode only; contiguous has no gaps).
-    ' One tear shape, used twice: as-is on the left cell's right edge, then mirrored
-    ' + flipped on the right cell's left edge so the two torn edges are symmetric.
     For ci = 1 To pn - 1
         If DateAdd(IntervalCode(t), 1, pageCols(ci)) <> pageCols(ci + 1) Then
-            ApplyTear sld, cellNames(ci), False, ci * colW, sc      ' left cell: jagged right edge
-            ApplyTear sld, cellNames(ci + 1), True, ci * colW, sc   ' right cell: mirrored tear
+            ApplyTear sld, cellNames(ci), True, ci * colW, sc       ' TearA: left cell's right edge
+            ApplyTear sld, cellNames(ci + 1), False, ci * colW, sc  ' TearB (rot 180): right cell's left edge
         End If
     Next ci
 
@@ -571,7 +569,7 @@ Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As 
 End Sub
 
 ' Subtract the tear freeform from a cell's edge (cell stays primary -> keeps fill + text).
-Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal flipH As Boolean, _
+Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal isTearA As Boolean, _
                       ByVal boundaryX As Single, ByVal sc As Single)
     Dim tear As Shape, shp As Shape, before As Object
     On Error GoTo Bail
@@ -580,7 +578,7 @@ Private Sub ApplyTear(ByVal sld As slide, ByVal cellName As String, ByVal flipH 
     For Each shp In sld.Shapes
         before(shp.Name) = 1
     Next shp
-    Set tear = BuildTear(sld, flipH, boundaryX, sc)
+    Set tear = BuildTear(sld, isTearA, boundaryX, sc)
     tear.Name = "TLTear_tmp"
     before("TLTear_tmp") = 1
     sld.Shapes.Range(Array(cellName, "TLTear_tmp")).MergeShapes msoMergeSubtract, sld.Shapes(cellName)
@@ -594,30 +592,43 @@ Bail:
     If Not tear Is Nothing Then tear.Delete       ' a failed tear must not abort the build
 End Sub
 
-' Recreate the user's tear freeform at the cell boundary, scaled. The same shape is
-' used on both sides of a gap: the left cell gets it as-is (its jagged edge cuts the
-' right side); the right cell gets it mirror-positioned + flipped horizontally, so the
-' two torn edges are symmetric ("flipped for the other side"). Node coords are
-' normalized 0..1 of the shape box; offsets/sizes come from Tear Example.pptx (TearA,
-' authored for a 30pt-tall cell).
-Private Function BuildTear(ByVal sld As slide, ByVal flipH As Boolean, _
+' Recreate the user's tear freeform at the cell boundary, scaled. TearA cuts the left
+' cell's right edge; TearB cuts the right cell's left edge. In Tear Example.pptx TearB
+' is authored rotated 180 deg (its jagged edge sits upper-right), so we rebuild its path
+' and rotate the shape 180 to match. Node coords are normalized 0..1 of the shape box;
+' offsets/sizes/rotation come from the example (authored for a 30pt-tall cell).
+Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
                            ByVal boundaryX As Single, ByVal sc As Single) As Shape
     Dim ff As FreeformBuilder, sh As Shape, L As Single, T As Single, w As Single, h As Single
-    w = 29.7 * sc: h = 60.9 * sc: T = BAND_TOP - 15.2 * sc
-    ' as-is the tear spans [bx-11.6, bx+18.1]; mirroring it across bx -> [bx-18.1, bx+11.6]
-    If flipH Then L = boundaryX - 18.1 * sc Else L = boundaryX - 11.6 * sc
-    Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5252 * w, T)
-    ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.6046 * h
-    ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6779 * w, T + 0.6046 * h
-    ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
-    ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
-    ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.3536 * w, T + 0.5616 * h
-    ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1765 * w, T + 0.5616 * h
-    ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.3117 * w, T + 0.3569 * h, _
-                L + 0.3964 * w, T + 0.1923 * h, L + 0.5252 * w, T
-    Set sh = ff.ConvertToShape
-    If flipH Then sh.Flip msoFlipHorizontal     ' mirror so the right cell tears symmetrically
-    Set BuildTear = sh
+    If isTearA Then
+        w = 29.7 * sc: h = 60.9 * sc
+        L = boundaryX - 11.6 * sc: T = BAND_TOP - 15.2 * sc
+        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5252 * w, T)
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.6046 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6779 * w, T + 0.6046 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.3536 * w, T + 0.5616 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1765 * w, T + 0.5616 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.3117 * w, T + 0.3569 * h, _
+                    L + 0.3964 * w, T + 0.1923 * h, L + 0.5252 * w, T
+        Set BuildTear = ff.ConvertToShape
+    Else
+        w = 27.7 * sc: h = 60.2 * sc
+        L = boundaryX - 18.1 * sc: T = BAND_TOP - 9 * sc
+        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5644 * w, T)
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.5997 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6539 * w, T + 0.5997 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.2919 * w, T + 0.5935 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1152 * w, T + 0.5904 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2943 * w, T + 0.3832 * h, _
+                    L + 0.3853 * w, T + 0.2072 * h, L + 0.5644 * w, T
+        Set sh = ff.ConvertToShape
+        sh.Rotation = 180          ' TearB is authored rotated 180 deg in the example
+        Set BuildTear = sh
+    End If
 End Function
 
 ' One unit-column of stacked entries with date-accurate leader lines.
