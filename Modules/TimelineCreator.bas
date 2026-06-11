@@ -601,30 +601,30 @@ Private Function BuildTear(ByVal sld As slide, ByVal isTearA As Boolean, _
                            ByVal boundaryX As Single, ByVal sc As Single) As Shape
     Dim ff As FreeformBuilder, sh As Shape, L As Single, T As Single, w As Single, h As Single
     If isTearA Then
-        w = 29.7 * sc: h = 60.9 * sc
-        L = boundaryX - 11.6 * sc: T = BAND_TOP - 15.2 * sc
-        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5252 * w, T)
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.6046 * h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6779 * w, T + 0.6046 * h
+        w = 29.2 * sc: h = 61.9 * sc
+        L = boundaryX - 11 * sc: T = BAND_TOP - 16.1 * sc
+        Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5739 * w, T)
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.6106 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6717 * w, T + 0.6106 * h
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.3536 * w, T + 0.5616 * h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1765 * w, T + 0.5616 * h
-        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.3117 * w, T + 0.3569 * h, _
-                    L + 0.3964 * w, T + 0.1923 * h, L + 0.5252 * w, T
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + 0.997 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.3412 * w, T + 0.5682 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1606 * w, T + 0.5682 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2984 * w, T + 0.3667 * h, _
+                    L + 0.4426 * w, T + 0.1894 * h, L + 0.5739 * w, T
         Set BuildTear = ff.ConvertToShape
     Else
-        w = 27.7 * sc: h = 60.2 * sc
+        w = 27.7 * sc: h = 57.8 * sc
         L = boundaryX - 18.1 * sc: T = BAND_TOP - 9 * sc
         Set ff = sld.Shapes.BuildFreeform(msoEditingCorner, L + 0.5644 * w, T)
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.5997 * h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6539 * w, T + 0.5997 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + 0.5828 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.6539 * w, T + 0.5828 * h
         ff.AddNodes msoSegmentLine, msoEditingAuto, L + w, T + h
         ff.AddNodes msoSegmentLine, msoEditingAuto, L, T + h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.2919 * w, T + 0.5935 * h
-        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.1152 * w, T + 0.5904 * h
-        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2943 * w, T + 0.3832 * h, _
-                    L + 0.3853 * w, T + 0.2072 * h, L + 0.5644 * w, T
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.2919 * w, T + 0.5763 * h
+        ff.AddNodes msoSegmentLine, msoEditingAuto, L + 0.0948 * w, T + 0.5763 * h
+        ff.AddNodes msoSegmentCurve, msoEditingAuto, L + 0.2739 * w, T + 0.3604 * h, _
+                    L + 0.3853 * w, T + 0.2159 * h, L + 0.5644 * w, T
         Set sh = ff.ConvertToShape
         sh.Rotation = 180          ' TearB is authored rotated 180 deg in the example
         Set BuildTear = sh
