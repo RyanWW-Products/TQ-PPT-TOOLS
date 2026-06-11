@@ -56,6 +56,7 @@ Private Type TLEvent
     DescH     As Single
     UnitStart As Date        ' the date truncated to the chosen unit (column key)
     UnitFrac  As Double       ' position within the unit, 0..1 (leader-line X)
+    Bates     As String       ' Bates / document number, parsed + held (not yet rendered)
 End Type
 
 Private Function NAVY() As Long
@@ -178,7 +179,7 @@ End Function
 Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent, _
                             ByRef errLog As String) As Long
     Dim xl As Object, wb As Object, ws As Object
-    Dim colDate As Long, colTime As Long, colDesc As Long
+    Dim colDate As Long, colTime As Long, colDesc As Long, colBates As Long
     Dim lastCol As Long, c As Long, hdr As String
     Dim r As Long, n As Long
     Dim rawDate As Variant, rawTime As Variant, desc As String
@@ -198,6 +199,9 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
             Case "date":        colDate = c
             Case "time":        colTime = c
             Case "description", "desc", "event": colDesc = c
+            Case "bates", "bates number", "bates no", "bates #", "bates range", _
+                 "document number", "document no", "doc number", "doc no", "doc #", _
+                 "document", "doc", "control number", "production number": colBates = c
         End Select
     Next c
     If colDate = 0 Or colDesc = 0 Then
@@ -223,6 +227,7 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
                 If Len(Trim$(CStr(rawTime & ""))) > 0 Then ev.DateLabel = ev.DateLabel & "  " & FormatTime(rawTime)
             End If
             ev.Desc = desc
+            If colBates > 0 Then ev.Bates = Trim$(CStr(ws.Cells(r, colBates).Value & "")) Else ev.Bates = vbNullString
             ev.OrigIndex = r
             n = n + 1
             If n > UBound(events) Then ReDim Preserve events(1 To UBound(events) + 1000)
@@ -805,22 +810,52 @@ Private Sub CreateTimelineTemplate()
     xl.Visible = False
     Set wb = xl.Workbooks.Add
     Set ws = wb.Worksheets(1)
+    ws.Name = "Timeline"
     ws.Range("A1").Value = "Date"
     ws.Range("B1").Value = "Time"
     ws.Range("C1").Value = "Description"
-    ws.Range("A1:C1").Font.bold = True
-    ws.Range("A2").Value = "1/15/2023":  ws.Range("C2").Value = "Example: exact date"
+    ws.Range("D1").Value = "Bates"
+    ws.Range("A1:D1").Font.bold = True
+    ws.Range("A2").Value = "1/15/2023":  ws.Range("C2").Value = "Example: exact date":     ws.Range("D2").Value = "ABC-000123"
     ws.Range("A3").Value = "April 2023":  ws.Range("C3").Value = "Example: month + year"
     ws.Range("A4").Value = "2024":        ws.Range("C4").Value = "Example: year only"
-    ws.Columns("A:C").AutoFit
+    ws.Columns("A:D").AutoFit
+
+    ' second sheet: how to convert any source timeline with Copilot (prompt travels with the template)
+    Dim ins As Object
+    Set ins = wb.Worksheets.Add(After:=ws)
+    ins.Name = "Convert with Copilot"
+    ins.Range("A1").Value = "Convert any timeline (PDF / Word / Excel) into the 'Timeline' sheet using Microsoft Copilot:"
+    ins.Range("A1").Font.bold = True
+    ins.Range("A3").Value = "1.  In Microsoft Copilot (Chat, or Copilot in Word), attach or open your source timeline."
+    ins.Range("A4").Value = "2.  Copy the prompt in the box below and paste it into Copilot."
+    ins.Range("A5").Value = "3.  Paste Copilot's table into the 'Timeline' sheet under the headers (row 1), then run Make Timeline."
+    ins.Range("A7").Value = "PROMPT  (click the cell below and copy it):"
+    ins.Range("A7").Font.bold = True
+    ins.Range("A8").Value = Replace(CopilotPromptText(), vbCrLf, Chr(10))
+    ins.Range("A8").WrapText = True
+    ins.Range("A8").VerticalAlignment = -4160      ' xlTop
+    ins.Columns("A").ColumnWidth = 95
+    Dim ok As Boolean
     On Error Resume Next
     wb.SaveAs savePath
-    wb.Close True
+    ok = (Err.Number = 0)
+    Err.Clear
+    wb.Close ok                 ' save-on-close only if SaveAs worked; avoids a re-save prompt on failure
     xl.Quit
+    Set xl = Nothing
     On Error GoTo 0
-    MsgBox "Blank template saved:" & vbCrLf & vbCrLf & savePath & vbCrLf & vbCrLf & _
-           "Fill in the Date and Description columns (Time optional), then run Make Timeline again.", _
-           vbInformation, "Timeline Creator"
+
+    If ok Then
+        MsgBox "Blank template saved:" & vbCrLf & vbCrLf & savePath & vbCrLf & vbCrLf & _
+               "Fill in the Date and Description columns (Time and Bates optional), then run Make Timeline again." & vbCrLf & _
+               "See the 'Convert with Copilot' tab to turn any PDF/Word/Excel timeline into this format.", _
+               vbInformation, "Timeline Creator"
+    Else
+        MsgBox "Couldn't save the template to:" & vbCrLf & vbCrLf & savePath & vbCrLf & vbCrLf & _
+               "Check the location isn't read-only or open elsewhere, then try again.", _
+               vbExclamation, "Timeline Creator"
+    End If
 End Sub
 
 Private Sub ReportSummary(ByVal summary As String, ByVal errLog As String)
@@ -1050,7 +1085,8 @@ Private Sub StoreTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, ByVal 
     For i = 1 To n        ' strip the delimiter chars from text so records can't collide
         s = s & CStr(CDbl(ev(i).RawDate)) & Chr(1) _
               & Replace(Replace(ev(i).DateLabel, Chr(1), ""), Chr(2), "") & Chr(1) _
-              & Replace(Replace(ev(i).Desc, Chr(1), ""), Chr(2), "") & Chr(2)
+              & Replace(Replace(ev(i).Desc, Chr(1), ""), Chr(2), "") & Chr(1) _
+              & Replace(Replace(ev(i).Bates, Chr(1), ""), Chr(2), "") & Chr(2)
     Next i
     SetTag sld, "TLDATA_EVENTS", s
     SetTag sld, "TLDATA_N", CStr(n)
@@ -1065,6 +1101,7 @@ End Sub
 Private Function LoadTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, ByRef n As Long, _
                                   ByRef t As String, ByRef color As String, ByRef gaps As Boolean, _
                                   ByRef multi As Boolean, ByRef wipe As Boolean, ByRef weighted As Boolean) As Boolean
+    On Error GoTo CleanFail        ' any parse error on corrupt/edited state -> return False (friendly caller message)
     If Len(sld.Tags("TLDATA_N")) = 0 Then Exit Function
     n = CLng(sld.Tags("TLDATA_N"))
     If n < 1 Then Exit Function
@@ -1078,6 +1115,7 @@ Private Function LoadTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, By
         ev(i).RawDate = CDate(CDbl(f(0)))
         ev(i).DateLabel = f(1)
         ev(i).Desc = f(2)
+        If UBound(f) >= 3 Then ev(i).Bates = f(3)     ' tolerate older 3-field saved state
         ev(i).SortKey = CDbl(ev(i).RawDate)
         ev(i).OrigIndex = i
     Next i
@@ -1088,6 +1126,9 @@ Private Function LoadTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, By
     wipe = (sld.Tags("TLDATA_WIPE") = "1")
     weighted = (sld.Tags("TLDATA_WEIGHTED") = "1")
     LoadTimelineState = True
+    Exit Function
+CleanFail:
+    LoadTimelineState = False
 End Function
 
 Private Function FindTimelineSlide() As slide
@@ -1106,4 +1147,55 @@ Private Sub SetTag(ByVal sld As slide, ByVal tagKey As String, ByVal tagVal As S
     sld.Tags.Delete tagKey
     On Error GoTo 0
     sld.Tags.Add tagKey, tagVal
+End Sub
+
+' ============================================================================
+' COPILOT PROMPT  -  convert any source timeline into the import format
+' ============================================================================
+' The single source of truth for the prompt (used by the ribbon button and the
+' "Convert with Copilot" sheet of the blank template). Tuned to exactly what
+' ReadEvents/ParseDateCell accept, including the Bates column.
+Private Function CopilotPromptText() As String
+    Dim s As String, nl As String
+    nl = vbCrLf
+    s = "Convert the attached timeline into a fixed spreadsheet format. Extract EVERY dated event and output ONE table with exactly these four columns and this header row:" & nl & nl
+    s = s & "Date | Time | Description | Bates" & nl & nl
+    s = s & "Rules:" & nl
+    s = s & "- One row per distinct event, sorted oldest to newest." & nl
+    s = s & "- Date: use the most precise the source supports - a full date as M/D/YYYY (e.g. 3/15/2020); only a month and year as ""Month YYYY"" (e.g. April 2023); only a year as the 4-digit year (e.g. 2024). Never leave Date blank; omit events that have no date at all." & nl
+    s = s & "- Time: only if a clock time is given (e.g. 2:30 PM); otherwise leave blank." & nl
+    s = s & "- Description: a concise one-line summary of the event in plain text, with no line breaks or bullet characters." & nl
+    s = s & "- Bates: the Bates number / document number / control number associated with the event if one is present (e.g. ABC-000123, or a range ABC-000123-000130); otherwise leave blank. Copy it exactly - do not alter or invent it." & nl
+    s = s & "- For a date range, use the start date (one row)." & nl
+    s = s & "- Do not invent events, dates, or Bates numbers. Output ONLY the table - no commentary and no extra columns."
+    CopilotPromptText = s
+End Function
+
+' Ribbon: copy the Copilot prompt to the clipboard and show the 3 steps.
+Public Sub CopilotTimelinePrompt(control As IRibbonControl)
+    Dim copied As Boolean
+    On Error Resume Next
+    CopyToClipboard CopilotPromptText()
+    copied = (Err.Number = 0)
+    On Error GoTo 0
+
+    Dim msg As String
+    If copied Then
+        msg = "A Copilot prompt has been copied to your clipboard." & vbCrLf & vbCrLf
+    Else
+        msg = "Couldn't reach the clipboard automatically - you can copy the prompt from the " & _
+              """Convert with Copilot"" sheet of a blank template instead (Make Timeline -> No)." & vbCrLf & vbCrLf
+    End If
+    msg = msg & "1.  In Microsoft Copilot (Chat, or Copilot in Word), attach or open your source timeline (PDF / Word / Excel)." & vbCrLf & _
+                "2.  Paste the prompt (Ctrl+V) and send it." & vbCrLf & _
+                "3.  Paste Copilot's table into a blank timeline template, save it, then run Make Timeline on that file."
+    MsgBox msg, vbInformation, "Convert a Timeline with Copilot"
+End Sub
+
+' Put text on the Windows clipboard (late-bound MSForms.DataObject; no project reference needed).
+Private Sub CopyToClipboard(ByVal s As String)
+    Dim dobj As Object
+    Set dobj = GetObject("new:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")   ' MSForms.DataObject
+    dobj.SetText s
+    dobj.PutInClipboard
 End Sub

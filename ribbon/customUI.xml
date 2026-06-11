@@ -32,6 +32,7 @@
            <menu id="MenuTimelineEdits" label="Timeline Edits" size="large" image="TimelineEdits" supertip="Tear Gap (tear a shape's edge) and Toggle Weighted Timeline (size columns by event count).">
              <button id="ButtonC9" label="Tear Gap" onAction="TearGap" image="TimelineEdits" screentip="Tear Gap" supertip="Select one shape, then tear its left or right edge (boolean-subtracts the tear, scaled to the shape's height)."/>
              <button id="ButtonC10" label="Toggle Weighted Timeline" onAction="ToggleWeightedTimeline" image="TimelineEdits" screentip="Toggle Weighted Timeline" supertip="Re-flow the current imported timeline: size columns by how many events each unit has, or back to uniform width."/>
+             <button id="ButtonC11" label="Copilot Prompt" onAction="CopilotTimelinePrompt" image="TimelineEdits" screentip="Copy Copilot Prompt" supertip="Copy a ready-made Microsoft Copilot prompt that converts any timeline (PDF / Word / Excel) into the Date / Time / Description / Bates format Make Timeline needs."/>
            </menu>
          </group >
          <group id="SampleGroupD" label="Quick Graphics"> 
