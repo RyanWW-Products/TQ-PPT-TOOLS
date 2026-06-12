@@ -1,5 +1,5 @@
 {
   "addinVersion": "5.5.1",
   "assetsVersion": 1,
-  "notes": "Timeline Creator: import an Excel timeline as a DateBar band with real Make-Entry entries, type auto-suggest, and a torn bar at gaps. Calendar: single month or a range."
+  "notes": "Timeline Creator: import an Excel or CSV timeline as a DateBar band with real Make-Entry entries and an auto-suggested unit; weighted (event-count) column widths, multi-lane packing for busy periods, and a torn bar at gaps. New Timeline Edits menu: Tear Gap, Toggle Weighted Timeline, Space Evenly with Leaders, and a Copilot prompt that converts any PDF/Word/Excel timeline into the import format. Reads a Bates/document-number column. Calendar: single month or a date range."
 }
