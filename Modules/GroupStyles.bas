@@ -3,7 +3,7 @@ Option Explicit
 
 '====================================================
 ' (A) File I/O: Get/Load/Save Style Definitions
-' Now using the presentation’s custom document properties.
+' Now using the presentationï¿½s custom document properties.
 '====================================================
 Function LoadStyleDefinitions() As Object
     Dim defs As Object, curStyle As Object
@@ -41,32 +41,50 @@ End Function
 
 
 Sub SaveStyleDefinitions(defs As Object)
-    Dim xml As String
+    Dim ini As String
     Dim styleName As Variant, propName As Variant
     Dim styleDict As Object
-    
-    xml = ""
+
+    ini = ""
     For Each styleName In defs.Keys
-        xml = xml & "[" & styleName & "]" & vbCrLf
+        ini = ini & "[" & styleName & "]" & vbCrLf
         Set styleDict = defs(styleName)
         For Each propName In styleDict.Keys
-            xml = xml & propName & "=" & styleDict(propName) & vbCrLf
+            ' CleanValue strips CR/LF so a value can never fabricate a bogus key or [section]
+            ini = ini & propName & "=" & CleanValue(CStr(styleDict(propName))) & vbCrLf
         Next propName
-        xml = xml & vbCrLf
+        ini = ini & vbCrLf
     Next styleName
-    
+
     On Error Resume Next
-    ' Try to update the property if it exists...
-    ActivePresentation.CustomDocumentProperties("StyleDefinitions").Value = xml
+    ActivePresentation.CustomDocumentProperties("StyleDefinitions").Value = ini
     If Err.Number <> 0 Then
-        ' Otherwise add the property.
+        Err.Clear
         ActivePresentation.CustomDocumentProperties.Add Name:="StyleDefinitions", _
-            LinkToContent:=False, Type:=msoPropertyTypeString, Value:=xml
+            LinkToContent:=False, Type:=msoPropertyTypeString, Value:=ini
     End If
     On Error GoTo 0
-    
-    Debug.Print "Saved style definitions to CustomDocumentProperties"
+
+    ' A custom document property can silently TRUNCATE a long value. Read it back and
+    ' warn instead of corrupting the style DB invisibly.
+    Dim check As String
+    On Error Resume Next
+    check = ActivePresentation.CustomDocumentProperties("StyleDefinitions").Value
+    On Error GoTo 0
+    ' Compare CR-stripped lengths so a CRLF->LF normalization on store isn't mistaken for truncation;
+    ' only a genuinely SHORTER readback means data was lost.
+    If Len(Replace(check, vbCr, "")) < Len(Replace(ini, vbCr, "")) Then
+        MsgBox "The style definitions may not have fully saved (" & Len(check) & " of " & Len(ini) & _
+               " characters stored)." & vbCrLf & vbCrLf & _
+               "There are likely more/larger styles than this presentation's property storage allows.", _
+               vbExclamation, "Group Styles"
+    End If
 End Sub
+
+' Keep a serialized value on a single line so it cannot fabricate INI structure.
+Private Function CleanValue(ByVal v As String) As String
+    CleanValue = Replace(Replace(v, vbCr, " "), vbLf, " ")
+End Function
 
 
 '====================================================
@@ -112,7 +130,7 @@ Sub SaveSingleStyleDefinition(styleName As String, shp As Shape)
     def("Dual") = False
     
     
-    ' Capture the shape’s shadow properties
+    ' Capture the shapeï¿½s shadow properties
 On Error Resume Next
 def("TextShadow") = shp.TextFrame2.TextRange.Font.Shadow.Visible
 If shp.TextFrame2.TextRange.Font.Shadow.Visible Then
@@ -279,7 +297,11 @@ Sub DefineStyleCombined()
                 MsgBox "No shape selected.", vbExclamation
                 Exit Sub
             End If
-            chosenIndex = CLng(chosenNumber)
+            If Not IsNumeric(Trim(chosenNumber)) Then
+                MsgBox "Please enter a number.", vbExclamation
+                Exit Sub
+            End If
+            chosenIndex = CLng(Trim(chosenNumber))
             If chosenIndex < 1 Or chosenIndex > countItems Then
                 MsgBox "Invalid number selected.", vbExclamation
                 Exit Sub
@@ -315,7 +337,7 @@ Sub DefineStyleCombined()
         Exit Sub
     End If
     
-    Select Case choice
+    Select Case Trim(choice)
         Case "1": styleName = "Title 1"
         Case "2": styleName = "Subtitle"
         Case "3": styleName = "Body"
@@ -382,7 +404,7 @@ Sub AssignToGroupStyleCombined(control As IRibbonControl)
         MsgBox "No style selected.", vbExclamation
         Exit Sub
     End If
-    Select Case choice
+    Select Case Trim(choice)
         Case "1": styleName = "Title 1"
         Case "2": styleName = "Subtitle"
         Case "3": styleName = "Body"
@@ -397,13 +419,32 @@ Sub AssignToGroupStyleCombined(control As IRibbonControl)
             Exit Sub
     End Select
     
-    Dim shpItem As Shape
+    Dim shpItem As Shape, tagged As Long
+    tagged = 0
     For Each shpItem In shpRange
-        shpItem.Tags.Add "GroupStyle", styleName
-        Debug.Print "Assigned shape: " & shpItem.Name & " with style tag: " & styleName
+        TagWithStyle shpItem, styleName, tagged
     Next shpItem
-    MsgBox "Shapes assigned to style '" & styleName & "'.", vbInformation
+    If tagged = 0 Then
+        MsgBox "None of the selected shapes contain text to style.", vbExclamation
+        Exit Sub
+    End If
+    MsgBox tagged & " shape(s) assigned to style '" & styleName & "'.", vbInformation
     UpdateAllGroupStylesCombined
+End Sub
+
+' Tag a shape - or, for a GROUP, its text-bearing descendants - with the GroupStyle tag.
+' UpdateShapesInContainer only reads the tag on non-group leaves, so tagging a group
+' itself is a silent no-op; drill in instead. Mirrors TimelineEntry's per-child tagging.
+Private Sub TagWithStyle(ByVal shp As Shape, ByVal styleName As String, ByRef tagged As Long)
+    Dim child As Shape
+    If shp.Type = msoGroup Then
+        For Each child In shp.GroupItems
+            TagWithStyle child, styleName, tagged
+        Next child
+    ElseIf shp.HasTextFrame Then
+        shp.Tags.Add "GroupStyle", styleName
+        tagged = tagged + 1
+    End If
 End Sub
 
 '====================================================
@@ -429,24 +470,24 @@ Sub UpdateShapesInContainer(shapesCollection As Object, defs As Object)
         If shp.Type = msoGroup Then
             UpdateShapesInContainer shp.GroupItems, defs
         Else
+            styleName = ""                          ' reset; don't carry the previous shape's tag
             On Error Resume Next
             styleName = shp.Tags("GroupStyle")
             On Error GoTo 0
-            If styleName <> "" Then
-    If defs.exists(styleName) Then
-        Dim styleDef As Object
-        Set styleDef = defs(styleName)
-        If styleDef.exists("Dual") And styleDef("Dual") = True Then
-            ApplyDualStyleDefinition styleDef, shp
-        Else
-            ApplySingleStyleDefinition styleDef, shp
-        End If
-        Debug.Print "Updated shape: " & shp.Name
-    Else
-        Debug.Print "No definition found for style: " & styleName
-    End If
-End If
-
+            ' "Entry Body w/ Title" is assign-only: never auto-restyled (its title line is hand-tuned per entry)
+            If styleName <> "" And styleName <> "Entry Body w/ Title" Then
+                If defs.exists(styleName) Then
+                    Dim styleDef As Object
+                    Set styleDef = defs(styleName)
+                    On Error Resume Next            ' one problem shape must not abort the whole deck sweep
+                    If styleDef.exists("Dual") And styleDef("Dual") = True Then
+                        ApplyDualStyleDefinition styleDef, shp
+                    Else
+                        ApplySingleStyleDefinition styleDef, shp
+                    End If
+                    On Error GoTo 0
+                End If
+            End If
         End If
     Next shp
 End Sub
@@ -455,30 +496,30 @@ End Sub
 ' (F) APPLY SINGLE STYLE DEFINITION
 '====================================================
 Sub ApplySingleStyleDefinition(styleDef As Object, shp As Shape)
+    On Error Resume Next                 ' a missing/odd key degrades gracefully instead of aborting the shape
     With shp.TextFrame.TextRange.Font
-        .Name = styleDef("FontName")
-        .Size = styleDef("FontSize")
-        .Bold = styleDef("Bold")
-        .Italic = styleDef("Italic")
-        .Underline = styleDef("Underline")
-        .Color.RGB = styleDef("FontColor")
+        If styleDef.exists("FontName") Then .Name = styleDef("FontName")
+        If styleDef.exists("FontSize") Then .Size = styleDef("FontSize")
+        If styleDef.exists("Bold") Then .Bold = styleDef("Bold")
+        If styleDef.exists("Italic") Then .Italic = styleDef("Italic")
+        If styleDef.exists("Underline") Then .Underline = styleDef("Underline")
+        If styleDef.exists("FontColor") Then .Color.RGB = styleDef("FontColor")
     End With
     With shp.TextFrame.TextRange.ParagraphFormat
-        .Alignment = CInt(Val(styleDef("Alignment")))
-        .SpaceBefore = CDbl(styleDef("SpaceBefore"))
-        .SpaceAfter = CDbl(styleDef("SpaceAfter"))
+        If styleDef.exists("Alignment") Then .Alignment = CInt(Val(styleDef("Alignment")))
+        If styleDef.exists("SpaceBefore") Then .SpaceBefore = CDbl(styleDef("SpaceBefore"))
+        If styleDef.exists("SpaceAfter") Then .SpaceAfter = CDbl(styleDef("SpaceAfter"))
     End With
     With shp.TextFrame
-        .MarginLeft = styleDef("MarginLeft")
-        .MarginRight = styleDef("MarginRight")
-        .MarginTop = styleDef("MarginTop")
-        .MarginBottom = styleDef("MarginBottom")
-        .VerticalAnchor = styleDef("VerticalAnchor")
-        .WordWrap = CBool(styleDef("WordWrap"))
+        If styleDef.exists("MarginLeft") Then .MarginLeft = styleDef("MarginLeft")
+        If styleDef.exists("MarginRight") Then .MarginRight = styleDef("MarginRight")
+        If styleDef.exists("MarginTop") Then .MarginTop = styleDef("MarginTop")
+        If styleDef.exists("MarginBottom") Then .MarginBottom = styleDef("MarginBottom")
+        If styleDef.exists("VerticalAnchor") Then .VerticalAnchor = styleDef("VerticalAnchor")
+        If styleDef.exists("WordWrap") Then .WordWrap = CBool(styleDef("WordWrap"))
     End With
-    On Error Resume Next
-    shp.TextFrame2.AutoSize = styleDef("AutoSize")
-    On Error GoTo 0
+    If styleDef.exists("AutoSize") Then shp.TextFrame2.AutoSize = styleDef("AutoSize")
+
     If styleDef.exists("FillColor") Then
         With shp.Fill
             .ForeColor.RGB = styleDef("FillColor")
@@ -493,24 +534,30 @@ Sub ApplySingleStyleDefinition(styleDef As Object, shp As Shape)
             .Visible = msoTrue
         End With
     End If
-    
-    ' Apply text shadow properties
-On Error Resume Next
-If styleDef("TextShadow") = "True" Or styleDef("TextShadow") = "-1" Or CBool(styleDef("TextShadow")) = True Then
-    shp.TextFrame2.TextRange.Font.Shadow.Visible = msoTrue
-    shp.TextFrame2.TextRange.Font.Shadow.ForeColor.RGB = styleDef("TextShadowColor")
-    shp.TextFrame2.TextRange.Font.Shadow.OffsetX = styleDef("TextShadowOffsetX")
-    shp.TextFrame2.TextRange.Font.Shadow.OffsetY = styleDef("TextShadowOffsetY")
-    shp.TextFrame2.TextRange.Font.Shadow.Transparency = styleDef("TextShadowTransparency")
-Else
-    shp.TextFrame2.TextRange.Font.Shadow.Visible = msoFalse
-End If
-On Error GoTo 0
 
+    ApplyTextShadow styleDef, shp
+    On Error GoTo 0
+End Sub
 
-
-    
-    
+' Shared text-shadow apply for single + dual styles. Absent or false -> shadow off.
+Private Sub ApplyTextShadow(ByVal styleDef As Object, ByVal shp As Shape)
+    On Error Resume Next
+    Dim wantShadow As Boolean
+    wantShadow = False
+    If styleDef.exists("TextShadow") Then
+        wantShadow = (styleDef("TextShadow") = "True" Or styleDef("TextShadow") = "-1" Or CBool(styleDef("TextShadow")) = True)
+    End If
+    If wantShadow Then
+        With shp.TextFrame2.TextRange.Font.Shadow
+            .Visible = msoTrue
+            .ForeColor.RGB = styleDef("TextShadowColor")
+            .OffsetX = styleDef("TextShadowOffsetX")
+            .OffsetY = styleDef("TextShadowOffsetY")
+            .Transparency = styleDef("TextShadowTransparency")
+        End With
+    Else
+        shp.TextFrame2.TextRange.Font.Shadow.Visible = msoFalse
+    End If
 End Sub
 
 '====================================================
@@ -518,12 +565,13 @@ End Sub
 ' Applies dual formatting: Paragraph(1) gets Line1 formatting; Paragraphs(2+) get Line2 formatting.
 '====================================================
 Sub ApplyDualStyleDefinition(styleDef As Object, shp As Shape)
+    On Error Resume Next                 ' degrade gracefully on missing/odd keys
     Dim tr As TextRange
-    Dim paraCount As Long
+    Dim paraCount As Long, p As Long
     Dim line1TR As TextRange, line2TR As TextRange
     Dim startOfLine2 As Long, lengthOfLine2 As Long
     Dim a1 As Long, a2 As Long
-    
+
     Set tr = shp.TextFrame.TextRange
     paraCount = tr.Paragraphs.count
     If paraCount >= 2 Then
@@ -535,51 +583,54 @@ Sub ApplyDualStyleDefinition(styleDef As Object, shp As Shape)
         Set line1TR = tr
         Set line2TR = Nothing
     End If
-    
+
     With line1TR.Font
-        .Name = styleDef("Line1_FontName")
-        .Size = styleDef("Line1_FontSize")
-        .Bold = styleDef("Line1_Bold")
-        .Italic = styleDef("Line1_Italic")
-        .Underline = styleDef("Line1_Underline")
-        .Color.RGB = styleDef("Line1_FontColor")
+        If styleDef.exists("Line1_FontName") Then .Name = styleDef("Line1_FontName")
+        If styleDef.exists("Line1_FontSize") Then .Size = styleDef("Line1_FontSize")
+        If styleDef.exists("Line1_Bold") Then .Bold = styleDef("Line1_Bold")
+        If styleDef.exists("Line1_Italic") Then .Italic = styleDef("Line1_Italic")
+        If styleDef.exists("Line1_Underline") Then .Underline = styleDef("Line1_Underline")
+        If styleDef.exists("Line1_FontColor") Then .Color.RGB = styleDef("Line1_FontColor")
     End With
     a1 = CLng(Val(styleDef("Line1_Alignment")))
     If a1 < 1 Or a1 > 4 Then a1 = 2
     With line1TR.ParagraphFormat
         .Alignment = a1
-        .SpaceBefore = CDbl(styleDef("Line1_SpaceBefore"))
-        .SpaceAfter = CDbl(styleDef("Line1_SpaceAfter"))
+        If styleDef.exists("Line1_SpaceBefore") Then .SpaceBefore = CDbl(styleDef("Line1_SpaceBefore"))
+        If styleDef.exists("Line1_SpaceAfter") Then .SpaceAfter = CDbl(styleDef("Line1_SpaceAfter"))
     End With
-    
+
     If Not line2TR Is Nothing Then
         With line2TR.Font
-            .Name = styleDef("Line2_FontName")
-            .Size = styleDef("Line2_FontSize")
-            .Bold = styleDef("Line2_Bold")
-            .Italic = styleDef("Line2_Italic")
-            .Underline = styleDef("Line2_Underline")
-            .Color.RGB = styleDef("Line2_FontColor")
+            If styleDef.exists("Line2_FontName") Then .Name = styleDef("Line2_FontName")
+            If styleDef.exists("Line2_FontSize") Then .Size = styleDef("Line2_FontSize")
+            If styleDef.exists("Line2_Bold") Then .Bold = styleDef("Line2_Bold")
+            If styleDef.exists("Line2_Italic") Then .Italic = styleDef("Line2_Italic")
+            If styleDef.exists("Line2_Underline") Then .Underline = styleDef("Line2_Underline")
+            If styleDef.exists("Line2_FontColor") Then .Color.RGB = styleDef("Line2_FontColor")
         End With
         a2 = CLng(Val(styleDef("Line2_Alignment")))
         If a2 < 1 Or a2 > 4 Then a2 = 1
-        tr.Paragraphs(2).ParagraphFormat.Alignment = a2
-        tr.Paragraphs(2).ParagraphFormat.SpaceBefore = CDbl(styleDef("Line2_SpaceBefore"))
-        tr.Paragraphs(2).ParagraphFormat.SpaceAfter = CDbl(styleDef("Line2_SpaceAfter"))
+        ' Line2 font already spans paragraphs 2..N; apply its paragraph format to all of them too
+        For p = 2 To paraCount
+            With tr.Paragraphs(p).ParagraphFormat
+                .Alignment = a2
+                If styleDef.exists("Line2_SpaceBefore") Then .SpaceBefore = CDbl(styleDef("Line2_SpaceBefore"))
+                If styleDef.exists("Line2_SpaceAfter") Then .SpaceAfter = CDbl(styleDef("Line2_SpaceAfter"))
+            End With
+        Next p
     End If
-    
+
     With shp.TextFrame
-        .MarginLeft = styleDef("MarginLeft")
-        .MarginRight = styleDef("MarginRight")
-        .MarginTop = styleDef("MarginTop")
-        .MarginBottom = styleDef("MarginBottom")
-        .VerticalAnchor = styleDef("VerticalAnchor")
-        .WordWrap = CBool(styleDef("WordWrap"))
+        If styleDef.exists("MarginLeft") Then .MarginLeft = styleDef("MarginLeft")
+        If styleDef.exists("MarginRight") Then .MarginRight = styleDef("MarginRight")
+        If styleDef.exists("MarginTop") Then .MarginTop = styleDef("MarginTop")
+        If styleDef.exists("MarginBottom") Then .MarginBottom = styleDef("MarginBottom")
+        If styleDef.exists("VerticalAnchor") Then .VerticalAnchor = styleDef("VerticalAnchor")
+        If styleDef.exists("WordWrap") Then .WordWrap = CBool(styleDef("WordWrap"))
     End With
-    On Error Resume Next
-    shp.TextFrame2.AutoSize = styleDef("AutoSize")
-    On Error GoTo 0
-    
+    If styleDef.exists("AutoSize") Then shp.TextFrame2.AutoSize = styleDef("AutoSize")
+
     If styleDef.exists("FillColor") Then
         With shp.Fill
             .ForeColor.RGB = styleDef("FillColor")
@@ -594,22 +645,9 @@ Sub ApplyDualStyleDefinition(styleDef As Object, shp As Shape)
             .Visible = msoTrue
         End With
     End If
-    
-    
-On Error Resume Next
-If styleDef("TextShadow") = "True" Or styleDef("TextShadow") = "-1" Or CBool(styleDef("TextShadow")) = True Then
-    shp.TextFrame2.TextRange.Font.Shadow.Visible = msoTrue
-    shp.TextFrame2.TextRange.Font.Shadow.ForeColor.RGB = styleDef("TextShadowColor")
-    shp.TextFrame2.TextRange.Font.Shadow.OffsetX = styleDef("TextShadowOffsetX")
-    shp.TextFrame2.TextRange.Font.Shadow.OffsetY = styleDef("TextShadowOffsetY")
-    shp.TextFrame2.TextRange.Font.Shadow.Transparency = styleDef("TextShadowTransparency")
-Else
-    shp.TextFrame2.TextRange.Font.Shadow.Visible = msoFalse
-End If
-On Error GoTo 0
 
-
-
+    ApplyTextShadow styleDef, shp
+    On Error GoTo 0
 End Sub
 
 
