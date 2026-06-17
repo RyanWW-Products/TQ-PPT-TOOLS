@@ -1693,3 +1693,58 @@ Public Sub PlaceEntryAtTop(control As IRibbonControl)
 Fail:
     MsgBox "Place Entry at Top failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Place Entry at Top"
 End Sub
+
+' ============================================================================
+' AUTO CENTER  (Formats)  -  align entry boxes by how many lines they wrap to
+' ============================================================================
+' Every "Entry Box" on the active slide: 1-2 wrapped lines -> centered; 3+ -> left.
+Public Sub AutoCenter(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim sld As slide
+    Set sld = ActiveTargetSlide()
+    If sld Is Nothing Then
+        MsgBox "Open a presentation and select a slide first.", vbExclamation, "Auto Center"
+        Exit Sub
+    End If
+    Dim changed As Long
+    changed = 0
+    AutoCenterRecurse sld.Shapes, changed
+    MsgBox changed & " entry box(es) re-aligned (1-2 lines centered, 3+ left-aligned).", vbInformation, "Auto Center"
+    Exit Sub
+Fail:
+    MsgBox "Auto Center failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Auto Center"
+End Sub
+
+Private Sub AutoCenterRecurse(ByVal shapesColl As Object, ByRef changed As Long)
+    Dim shp As Shape, lc As Long
+    For Each shp In shapesColl
+        If shp.Type = msoGroup Then
+            AutoCenterRecurse shp.GroupItems, changed
+        ElseIf IsEntryBox(shp) Then
+            lc = LineCountOf(shp)
+            If lc > 0 Then
+                If lc <= 2 Then
+                    shp.TextFrame.TextRange.ParagraphFormat.Alignment = ppAlignCenter
+                Else
+                    shp.TextFrame.TextRange.ParagraphFormat.Alignment = ppAlignLeft
+                End If
+                changed = changed + 1
+            End If
+        End If
+    Next shp
+End Sub
+
+Private Function IsEntryBox(ByVal shp As Shape) As Boolean
+    On Error Resume Next
+    If shp.Tags("GroupStyle") <> "Entry Box" Then Exit Function
+    If Not shp.HasTextFrame Then Exit Function
+    If Not shp.TextFrame.HasText Then Exit Function
+    IsEntryBox = True
+End Function
+
+' Number of DISPLAYED (wrapped) lines, like .Paragraphs.Count but counting wrap.
+Private Function LineCountOf(ByVal shp As Shape) As Long
+    On Error Resume Next
+    LineCountOf = shp.TextFrame.TextRange.Lines.count
+    On Error GoTo 0
+End Function
