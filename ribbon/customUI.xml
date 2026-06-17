@@ -36,6 +36,7 @@
              <button id="ButtonC12" label="Space Evenly with Leaders" onAction="SpaceEntriesEvenly" image="TimelineEdits" screentip="Space Evenly with Leaders" supertip="Distribute the selected entries with equal gaps based on their boxes only (ignoring the leader lines), moving each entry and its leader together."/>
              <button id="ButtonC13" label="Z Axis Fix" onAction="ZAxisFix" image="TimelineEdits" screentip="Z Axis Fix" supertip="Restack the entries on this slide so every leader line sits behind the entry boxes (groups preserved). Re-reads the current entries."/>
              <button id="ButtonC14" label="Date Snap" onAction="DateSnap" image="TimelineEdits" screentip="Date Snap" supertip="Move each entry horizontally so its leader line lines up with its date on the datebar. Re-reads the current bar and entries."/>
+             <button id="ButtonC15" label="Place Entry at Top" onAction="PlaceEntryAtTop" image="TimelineEdits" screentip="Place Entry at Top" supertip="Move the selected entries so their date box tops sit at 1.15in from the slide top, then snap their leader lines to the datebar."/>
            </menu>
          </group >
          <group id="SampleGroupD" label="Quick Graphics"> 

@@ -1631,3 +1631,65 @@ Private Function FindTaggedDescendant(ByVal shp As Shape, ByVal tagVal As String
         Next it
     End If
 End Function
+
+' ============================================================================
+' PLACE ENTRY AT TOP  -  pull selected entries up under the bar + snap leaders
+' ============================================================================
+' Moves each selected entry vertically so its date box top sits at 1.15" from the
+' slide top, then snaps that entry's leader line to the BottomBar (top -> bar middle,
+' bottom kept at the entry) - the same snap "Snap Entry Lines" uses.
+Public Sub PlaceEntryAtTop(control As IRibbonControl)
+    On Error GoTo Fail
+    If ActiveWindow.Selection.Type <> ppSelectionShapes Then
+        MsgBox "Select one or more timeline entries first.", vbExclamation, "Place Entry at Top"
+        Exit Sub
+    End If
+    Dim sr As ShapeRange
+    Set sr = ActiveWindow.Selection.ShapeRange
+    Dim sld As slide
+    Set sld = sr(1).Parent
+
+    ' the datebar to snap leaders to (may have been moved -> use its current position)
+    Dim bar As Shape
+    On Error Resume Next
+    Set bar = sld.Shapes("BottomBar")
+    On Error GoTo Fail
+    If bar Is Nothing Then
+        MsgBox "No datebar (BottomBar) found on this slide to snap leaders to.", vbExclamation, "Place Entry at Top"
+        Exit Sub
+    End If
+    Dim middleY As Single
+    middleY = bar.Top + bar.Height / 2
+
+    Const TARGET_TOP As Single = 82.8           ' 1.15" from the slide top (1.15 * 72)
+
+    Dim k As Long, shp As Shape, db As Shape, ln As Shape, lineBottomY As Single, placed As Long
+    placed = 0
+    For k = 1 To sr.count
+        Set shp = sr(k)
+        If IsEntryGroup(shp) Then
+            Set db = FindTaggedDescendant(shp, "Date Box")
+            If Not db Is Nothing Then
+                shp.Top = shp.Top + (TARGET_TOP - db.Top)     ' date box top -> 1.15" (vertical only)
+                Set ln = LeadingLineOf(shp)
+                If Not ln Is Nothing Then
+                    lineBottomY = ln.Top + ln.Height
+                    ln.Top = middleY                          ' snap leader top to the bar middle...
+                    ln.Height = lineBottomY - middleY         ' ...keeping its bottom at the entry
+                End If
+                placed = placed + 1
+            End If
+        End If
+    Next k
+
+    If placed = 0 Then
+        MsgBox "None of the selected shapes are timeline entries (a group with a date box + leader line).", _
+               vbExclamation, "Place Entry at Top"
+        Exit Sub
+    End If
+    MsgBox placed & " entr" & IIf(placed = 1, "y", "ies") & " placed at the top; leaders snapped to the bar.", _
+           vbInformation, "Place Entry at Top"
+    Exit Sub
+Fail:
+    MsgBox "Place Entry at Top failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Place Entry at Top"
+End Sub
