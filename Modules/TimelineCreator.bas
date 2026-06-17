@@ -261,7 +261,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
     If IsDate(v) And (VarType(v) = vbDate) Then
         d = CDate(v)
         ev.RawDate = d
-        ev.DateLabel = Format$(d, "mmm d, yyyy")
+        ev.DateLabel = Format$(d, "mmm d")
         GoTo Finish
     End If
 
@@ -296,7 +296,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
     If IsDate(s) Then
         d = CDate(s)
         ev.RawDate = d
-        ev.DateLabel = Format$(d, "mmm d, yyyy")
+        ev.DateLabel = Format$(d, "mmm d")
         GoTo Finish
     End If
     Exit Function
@@ -745,6 +745,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
                 Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, _
                                               dateX, bandBottom, True, sc, boxesH)
                 grp.Tags.Add "TLENTRY", "1"
+                grp.Tags.Add "TLFullDate", CStr(CDbl(ev(i).RawDate))   ' label may omit the year; keep the real date for Date Snap
                 grp.ZOrder msoSendToBack
                 If doWipe Then
                     animSeq = animSeq + 1
@@ -774,6 +775,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
                 Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, laneY(laneIdx), boxW, _
                                               laneCenter, bandBottom, True, sc, boxesH)
                 grp.Tags.Add "TLENTRY", "1"
+                grp.Tags.Add "TLFullDate", CStr(CDbl(ev(i).RawDate))   ' label may omit the year; keep the real date for Date Snap
                 grp.ZOrder msoSendToBack
                 If doWipe Then
                     animSeq = animSeq + 1
@@ -1582,7 +1584,17 @@ End Sub
 
 ' Read + parse an entry's date from its "Date Box" text (strips an appended time).
 Private Function TryEntryDate(ByVal entryGroup As Shape, ByRef d As Date) As Boolean
-    Dim db As Shape, s As String, ev As TLEvent
+    Dim db As Shape, s As String, ev As TLEvent, fd As String
+    ' prefer the full date stashed at build time (the visible label may omit the year)
+    On Error Resume Next
+    fd = entryGroup.Tags("TLFullDate")
+    On Error GoTo 0
+    If IsNumeric(fd) Then
+        d = CDate(CDbl(fd))
+        TryEntryDate = True
+        Exit Function
+    End If
+    ' otherwise parse the Date Box text (Make-Entry / manual entries carry a full date there)
     Set db = FindTaggedDescendant(entryGroup, "Date Box")
     If db Is Nothing Then Exit Function
     On Error Resume Next
