@@ -597,6 +597,7 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
         Set grp = sld.Shapes.Range(cellNames).Group
     End If
     grp.Name = "BottomBar"
+    grp.Tags.Add "TLType", t                        ' stamp the unit on the bar (shape tag -> survives copy/paste)
     With grp.Shadow                                 ' #1 drop shadow on the whole band
         .Visible = msoTrue
         .Type = msoShadow21
@@ -1484,18 +1485,22 @@ Public Sub DateSnap(control As IRibbonControl)
         Exit Sub
     End If
 
-    ' the date unit is stored by Make Timeline (state lives on the first timeline slide)
+    ' Unit type: prefer the BottomBar's own tag (a SHAPE tag -> survives copy/paste to another
+    ' slide or deck); fall back to the stored timeline state for older bars that lack the tag.
     Dim ev() As TLEvent, n As Long, t As String, color As String
     Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
     Dim tlSlide As slide
-    Set tlSlide = FindTimelineSlide()
-    If tlSlide Is Nothing Then
-        MsgBox "Date Snap needs a timeline created by Make Timeline (no stored timeline data was found).", _
-               vbExclamation, "Date Snap"
-        Exit Sub
+    t = ""
+    On Error Resume Next
+    t = sld.Shapes("BottomBar").Tags("TLType")
+    On Error GoTo 0
+    If t = "" Then
+        Set tlSlide = FindTimelineSlide()
+        If Not tlSlide Is Nothing Then LoadTimelineState tlSlide, ev, n, t, color, gaps, multi, wipe, weighted
     End If
-    If Not LoadTimelineState(tlSlide, ev, n, t, color, gaps, multi, wipe, weighted) Then
-        MsgBox "Couldn't read the stored timeline data.", vbExclamation, "Date Snap"
+    If t = "" Then
+        MsgBox "Couldn't determine the timeline's date unit. Run this on a slide that has a Make Timeline " & _
+               "datebar (the bar carries the unit), or keep the timeline's stored data.", vbExclamation, "Date Snap"
         Exit Sub
     End If
 

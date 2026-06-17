@@ -65,10 +65,16 @@ Sub CreateTimeline(control As IRibbonControl)
 
     End Select
 
-    ' Adding a new slide for the timeline
-    SlideIndex = ActivePresentation.Slides.Add(ActivePresentation.Slides.count + 1, ppLayoutBlank).SlideIndex
+    ' Draw the datebar on the CURRENTLY ACTIVE slide (previously this added a new slide)
+    If ActivePresentation.Slides.count = 0 Then
+        SlideIndex = ActivePresentation.Slides.Add(1, ppLayoutBlank).SlideIndex
+    ElseIf Not (ActiveWindow.View.slide Is Nothing) Then
+        SlideIndex = ActiveWindow.View.slide.SlideIndex
+    Else
+        SlideIndex = 1
+    End If
 
-    ' Creating the timeline on the new slide
+    ' Creating the datebar on the active slide
     If isTwoBar And (timelineType = "Days" Or timelineType = "Months") Then
         CreateTwoBarTimelineTable SlideIndex, startDate, endDate, timelineColor, timelineType
     Else
