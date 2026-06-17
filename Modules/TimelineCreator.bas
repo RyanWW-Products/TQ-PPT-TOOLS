@@ -561,7 +561,7 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
 
     Dim drawn As Long, animSeq As Long
     For ci = 1 To pn
-        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq, lanes(ci))
+        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq, lanes(ci), t)
     Next ci
 
     DrawPage = drawn
@@ -717,7 +717,8 @@ End Function
 Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
                             ByVal colUnit As Date, ByVal colLeft As Single, ByVal colW As Single, _
                             ByVal bandBottom As Single, ByVal sc As Single, _
-                            ByVal doWipe As Boolean, ByRef animSeq As Long, ByVal lanes As Long) As Long
+                            ByVal doWipe As Boolean, ByRef animSeq As Long, ByVal lanes As Long, _
+                            ByVal t As String) As Long
     Dim innerL As Single, innerR As Single, boxW As Single, drawn As Long, i As Long
     Dim dateX As Single, boxLeft As Single, boxesH As Single, grp As Shape
     Dim cursorY As Single, prevLeft As Single
@@ -743,7 +744,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
                 If boxLeft < innerL Then boxLeft = innerL
                 prevLeft = boxLeft
                 Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, cursorY, boxW, _
-                                              dateX, bandBottom, True, sc, boxesH)
+                                              dateX, bandBottom, True, sc, boxesH, ev(i).RawDate, t)
                 grp.Tags.Add "TLENTRY", "1"
                 grp.Tags.Add "TLFullDate", CStr(CDbl(ev(i).RawDate))   ' label may omit the year; keep the real date for Date Snap
                 grp.ZOrder msoSendToBack
@@ -773,7 +774,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
                 laneCenter = innerL + (laneIdx + 0.5) * laneW
                 boxLeft = laneCenter - boxW / 2
                 Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, laneY(laneIdx), boxW, _
-                                              laneCenter, bandBottom, True, sc, boxesH)
+                                              laneCenter, bandBottom, True, sc, boxesH, ev(i).RawDate, t)
                 grp.Tags.Add "TLENTRY", "1"
                 grp.Tags.Add "TLFullDate", CStr(CDbl(ev(i).RawDate))   ' label may omit the year; keep the real date for Date Snap
                 grp.ZOrder msoSendToBack

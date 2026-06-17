@@ -14,7 +14,7 @@ Sub EntryGenerator(control As IRibbonControl)
     Set oSlide = ActiveWindow.Selection.SlideRange(1)
     ' lineX/lineTopY < 0 -> Make-Entry default (centered, 50pt stub above)
     CreateTimelineEntry oSlide, "12/12/2099", "Lorem Ipsum", 100, 100, 2 * 72, _
-                        -1, -1, False, 1, dummy
+                        -1, -1, False, 1, dummy, CDate("12/12/2099"), "Days"
 End Sub
 
 ' Build one entry; return the final group. lineX/lineTopY >= 0 place the leader
@@ -24,10 +24,13 @@ End Sub
 Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As String, ByVal descText As String, _
         ByVal boxLeft As Single, ByVal boxTop As Single, ByVal boxW As Single, _
         ByVal lineX As Single, ByVal lineTopY As Single, ByVal fixedWidth As Boolean, _
-        ByVal fontScale As Single, ByRef boxesHeight As Single) As Shape
+        ByVal fontScale As Single, ByRef boxesHeight As Single, _
+        ByVal entryDate As Date, ByVal unitType As String) As Shape
     Static lineCounter As Long
-    Dim oDateBox As Shape, oEntryBox As Shape, oBoxGroup As Shape, oLine As Shape
+    Dim oDateBox As Shape, oEntryBox As Shape, oBoxGroup As Shape, oLine As Shape, entryGroup As Shape
+    Dim suffix As String
     lineCounter = lineCounter + 1
+    suffix = DateNameSuffix(entryDate, unitType)
 
     ' Date box (navy fill, white bold text)
     Set oDateBox = oSlide.Shapes.AddTextbox(msoTextOrientationHorizontal, boxLeft, boxTop, boxW, 50)
@@ -106,5 +109,31 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
     End With
     oLine.ZOrder msoSendToBack
 
-    Set CreateTimelineEntry = oSlide.Shapes.range(Array(oBoxGroup.Name, oLine.Name)).Group
+    ' group [boxes + line], then rename every part to the date-encoded scheme. Renaming AFTER
+    ' grouping means two entries on the same date can't collide on the names used to group.
+    Set entryGroup = oSlide.Shapes.range(Array(oBoxGroup.Name, oLine.Name)).Group
+    oDateBox.Name = "DateBox " & suffix
+    oEntryBox.Name = "Entry Box " & suffix
+    oBoxGroup.Name = "BoxGroup " & suffix
+    oLine.Name = "LeadingLine " & suffix
+    entryGroup.Name = "TimelineEntry " & suffix
+    Set CreateTimelineEntry = entryGroup
+End Function
+
+' "YYYY MM DD HH MM" for a date, zeroing parts finer than the timeline unit
+' (Years -> "2020 00 00 00 00"; Months -> "2020 06 00 00 00"; Days -> "2020 06 15 00 00";
+'  Hours -> "2020 06 15 09 00"). Minutes stay 00 (Hours is the finest unit).
+Private Function DateNameSuffix(ByVal d As Date, ByVal t As String) As String
+    Dim yy As String, mo As String, dd As String, hh As String, mn As String
+    yy = Format$(Year(d), "0000")
+    mo = "00": dd = "00": hh = "00": mn = "00"
+    Select Case t
+        Case "Hours"
+            mo = Format$(Month(d), "00"): dd = Format$(Day(d), "00"): hh = Format$(Hour(d), "00")
+        Case "Days"
+            mo = Format$(Month(d), "00"): dd = Format$(Day(d), "00")
+        Case "Months"
+            mo = Format$(Month(d), "00")
+    End Select
+    DateNameSuffix = yy & " " & mo & " " & dd & " " & hh & " " & mn
 End Function
