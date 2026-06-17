@@ -34,6 +34,8 @@
              <button id="ButtonC10" label="Toggle Weighted Timeline" onAction="ToggleWeightedTimeline" image="TimelineEdits" screentip="Toggle Weighted Timeline" supertip="Re-flow the current imported timeline: size columns by how many events each unit has, or back to uniform width."/>
              <button id="ButtonC11" label="Copilot Prompt" onAction="CopilotTimelinePrompt" image="TimelineEdits" screentip="Copy Copilot Prompt" supertip="Copy a ready-made Microsoft Copilot prompt that converts any timeline (PDF / Word / Excel) into the Date / Time / Description / Bates format Make Timeline needs."/>
              <button id="ButtonC12" label="Space Evenly with Leaders" onAction="SpaceEntriesEvenly" image="TimelineEdits" screentip="Space Evenly with Leaders" supertip="Distribute the selected entries with equal gaps based on their boxes only (ignoring the leader lines), moving each entry and its leader together."/>
+             <button id="ButtonC13" label="Z Axis Fix" onAction="ZAxisFix" image="TimelineEdits" screentip="Z Axis Fix" supertip="Restack the entries on this slide so every leader line sits behind the entry boxes (groups preserved). Re-reads the current entries."/>
+             <button id="ButtonC14" label="Date Snap" onAction="DateSnap" image="TimelineEdits" screentip="Date Snap" supertip="Move each entry horizontally so its leader line lines up with its date on the datebar. Re-reads the current bar and entries."/>
            </menu>
          </group >
          <group id="SampleGroupD" label="Quick Graphics"> 

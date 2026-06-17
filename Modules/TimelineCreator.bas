@@ -1400,3 +1400,222 @@ Private Sub BoxRectOf(ByVal shp As Shape, ByRef topY As Single, ByRef leftX As S
         topY = shp.Top: leftX = shp.Left: botY = shp.Top + shp.Height: rgtX = shp.Left + shp.Width
     End If
 End Sub
+
+' ============================================================================
+' Z AXIS FIX  -  put every leader line behind every entry box
+' ============================================================================
+' Reassesses the entries currently on the active slide (the user may have moved or
+' added some) and restacks the whole entry GROUPS so each lower entry's leader line
+' tucks behind the boxes above it. Groups are preserved (no ungrouping).
+Public Sub ZAxisFix(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim sld As slide
+    Set sld = ActiveTargetSlide()
+    If sld Is Nothing Then
+        MsgBox "Open a presentation and select a slide first.", vbExclamation, "Z Axis Fix"
+        Exit Sub
+    End If
+    If sld.Shapes.count = 0 Then
+        MsgBox "No timeline entries found on this slide.", vbExclamation, "Z Axis Fix"
+        Exit Sub
+    End If
+
+    Dim shp As Shape, ents() As Shape, tops() As Single, cnt As Long
+    Dim topY As Single, leftX As Single, botY As Single, rgtX As Single
+    ReDim ents(1 To sld.Shapes.count)
+    ReDim tops(1 To sld.Shapes.count)
+    cnt = 0
+    For Each shp In sld.Shapes
+        If IsEntryGroup(shp) Then
+            BoxRectOf shp, topY, leftX, botY, rgtX
+            cnt = cnt + 1
+            Set ents(cnt) = shp
+            tops(cnt) = topY
+        End If
+    Next shp
+    If cnt = 0 Then
+        MsgBox "No timeline entries (groups with a leader line) found on this slide.", vbExclamation, "Z Axis Fix"
+        Exit Sub
+    End If
+
+    ' sort entries by box top, topmost first (insertion sort)
+    Dim i As Long, j As Long, keyT As Single, keyS As Shape
+    For i = 2 To cnt
+        keyT = tops(i): Set keyS = ents(i)
+        j = i - 1
+        Do While j >= 1
+            If tops(j) <= keyT Then Exit Do
+            tops(j + 1) = tops(j): Set ents(j + 1) = ents(j)
+            j = j - 1
+        Loop
+        tops(j + 1) = keyT: Set ents(j + 1) = keyS
+    Next i
+
+    ' SendToBack top-first -> topmost entry ends frontmost among entries, the bar/other
+    ' content stays in front, and each lower entry's longer leader line sits behind the
+    ' boxes above it.
+    For i = 1 To cnt
+        ents(i).ZOrder msoSendToBack
+    Next i
+
+    MsgBox cnt & " entr" & IIf(cnt = 1, "y", "ies") & " restacked - leader lines are now behind the entry boxes.", _
+           vbInformation, "Z Axis Fix"
+    Exit Sub
+Fail:
+    MsgBox "Z Axis Fix failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Z Axis Fix"
+End Sub
+
+' ============================================================================
+' DATE SNAP  -  align each entry's leader line to its date on the datebar
+' ============================================================================
+' Moves entries HORIZONTALLY only so each leader line lands where its date falls on
+' the datebar. Re-reads the CURRENT datebar cell positions (the bar may have been
+' moved/resized) and the CURRENT entries (some may be new/moved). Needs a timeline
+' made by Make Timeline (which stores the date unit).
+Public Sub DateSnap(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim sld As slide
+    Set sld = ActiveTargetSlide()
+    If sld Is Nothing Then
+        MsgBox "Open a presentation and select a slide first.", vbExclamation, "Date Snap"
+        Exit Sub
+    End If
+
+    ' the date unit is stored by Make Timeline (state lives on the first timeline slide)
+    Dim ev() As TLEvent, n As Long, t As String, color As String
+    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
+    Dim tlSlide As slide
+    Set tlSlide = FindTimelineSlide()
+    If tlSlide Is Nothing Then
+        MsgBox "Date Snap needs a timeline created by Make Timeline (no stored timeline data was found).", _
+               vbExclamation, "Date Snap"
+        Exit Sub
+    End If
+    If Not LoadTimelineState(tlSlide, ev, n, t, color, gaps, multi, wipe, weighted) Then
+        MsgBox "Couldn't read the stored timeline data.", vbExclamation, "Date Snap"
+        Exit Sub
+    End If
+
+    ' map each datebar cell's label -> its CURRENT left/width (absolute) so a moved/resized bar still snaps
+    Dim cellLefts As Object, cellWidths As Object
+    Set cellLefts = CreateObject("Scripting.Dictionary")
+    Set cellWidths = CreateObject("Scripting.Dictionary")
+    CollectBandCells sld.Shapes, cellLefts, cellWidths
+    If cellLefts.count = 0 Then
+        MsgBox "No datebar cells found on this slide (looked for the 'BottomBar' band cells).", vbExclamation, "Date Snap"
+        Exit Sub
+    End If
+
+    Dim shp As Shape, snapped As Long, missed As Long, d As Date, lab As String
+    Dim innerL As Single, innerW As Single, targetX As Single, ln As Shape
+    snapped = 0: missed = 0
+    For Each shp In sld.Shapes
+        If IsEntryGroup(shp) Then
+            If TryEntryDate(shp, d) Then
+                lab = Trim$(GetSegmentLabel(t, UnitStartOf(d, t)))
+                If cellLefts.Exists(lab) Then
+                    innerL = cellLefts(lab) + COL_PAD
+                    innerW = cellWidths(lab) - 2 * COL_PAD
+                    If innerW < 0 Then innerW = 0           ' sub-16pt cell: pin to the padded-left edge
+                    targetX = innerL + UnitFracOf(d, t) * innerW
+                    Set ln = LeadingLineOf(shp)
+                    If Not ln Is Nothing Then
+                        shp.Left = shp.Left + (targetX - ln.Left)    ' horizontal only
+                        snapped = snapped + 1
+                    Else
+                        missed = missed + 1
+                    End If
+                Else
+                    missed = missed + 1
+                End If
+            Else
+                missed = missed + 1
+            End If
+        End If
+    Next shp
+
+    Dim msg As String
+    msg = snapped & " entr" & IIf(snapped = 1, "y", "ies") & " snapped to the datebar."
+    If missed > 0 Then msg = msg & vbCrLf & missed & " skipped (couldn't read the date, or its unit isn't on the bar)."
+    MsgBox msg, vbInformation, "Date Snap"
+    Exit Sub
+Fail:
+    MsgBox "Date Snap failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Date Snap"
+End Sub
+
+' --- shared helpers for the entry-edit commands -----------------------------
+' An entry = a group with a direct LeadingLine child (Make Entry + imported entries).
+Private Function IsEntryGroup(ByVal shp As Shape) As Boolean
+    Dim it As Shape
+    If shp.Type <> msoGroup Then Exit Function
+    For Each it In shp.GroupItems
+        If it.Name Like "LeadingLine*" Then IsEntryGroup = True: Exit Function
+    Next it
+End Function
+
+Private Function LeadingLineOf(ByVal entryGroup As Shape) As Shape
+    Dim it As Shape
+    If entryGroup.Type <> msoGroup Then Exit Function
+    For Each it In entryGroup.GroupItems
+        If it.Name Like "LeadingLine*" Then Set LeadingLineOf = it: Exit Function
+    Next it
+End Function
+
+' Recurse a container, recording each datebar cell by its label -> current Left/Width (absolute).
+Private Sub CollectBandCells(ByVal shapesColl As Object, ByVal cellLefts As Object, ByVal cellWidths As Object)
+    Dim shp As Shape, lab As String
+    For Each shp In shapesColl
+        If shp.Type = msoGroup Then
+            CollectBandCells shp.GroupItems, cellLefts, cellWidths
+        ElseIf shp.Name Like SHAPE_PREFIX & "_BandCell_*" Then
+            lab = ""
+            On Error Resume Next
+            lab = Trim$(shp.TextFrame.TextRange.text)
+            On Error GoTo 0
+            If lab <> "" Then
+                cellLefts(lab) = shp.Left
+                cellWidths(lab) = shp.Width
+            End If
+        End If
+    Next shp
+End Sub
+
+' Read + parse an entry's date from its "Date Box" text (strips an appended time).
+Private Function TryEntryDate(ByVal entryGroup As Shape, ByRef d As Date) As Boolean
+    Dim db As Shape, s As String, ev As TLEvent
+    Set db = FindTaggedDescendant(entryGroup, "Date Box")
+    If db Is Nothing Then Exit Function
+    On Error Resume Next
+    s = db.TextFrame.TextRange.text
+    On Error GoTo 0
+    s = CleanDateText(s)
+    If s = "" Then Exit Function
+    If ParseDateCell(s, ev) Then
+        d = ev.RawDate
+        TryEntryDate = True
+    End If
+End Function
+
+Private Function CleanDateText(ByVal s As String) As String
+    Dim p As Long
+    s = Trim$(s)
+    p = InStr(s, vbCr): If p > 0 Then s = Left$(s, p - 1)   ' drop a wrapped 2nd line
+    p = InStr(s, vbLf): If p > 0 Then s = Left$(s, p - 1)
+    Do While InStr(s, "  ") > 0                             ' collapse the "  <time>" gap but KEEP the time (Hours mode needs it)
+        s = Replace(s, "  ", " ")
+    Loop
+    CleanDateText = Trim$(s)
+End Function
+
+Private Function FindTaggedDescendant(ByVal shp As Shape, ByVal tagVal As String) As Shape
+    Dim it As Shape, found As Shape
+    On Error Resume Next
+    If shp.Tags("GroupStyle") = tagVal Then Set FindTaggedDescendant = shp: Exit Function
+    On Error GoTo 0
+    If shp.Type = msoGroup Then
+        For Each it In shp.GroupItems
+            Set found = FindTaggedDescendant(it, tagVal)
+            If Not found Is Nothing Then Set FindTaggedDescendant = found: Exit Function
+        Next it
+    End If
+End Function
