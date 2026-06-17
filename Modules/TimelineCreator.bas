@@ -24,7 +24,7 @@ Private Const SHAPE_PREFIX  As String = "EventCard"
 Private Const SLIDE_TAG     As String = "TLIMPORTER"
 
 Private Const MARGIN        As Single = 36
-Private Const BAND_TOP      As Single = 72
+Private Const BAND_TOP      As Single = 44.64      ' 0.62" from the top of the slide (0.62 * 72)
 Private Const BAND_HEIGHT   As Single = 30
 Private Const BAND_GAP      As Single = 24
 Private Const BOX_WIDTH     As Single = 168
@@ -37,7 +37,7 @@ Private Const LANE_GAP      As Single = 14        ' horizontal gap between packe
 
 Private Const FS_DATE       As Single = 12
 Private Const FS_DESC       As Single = 12        ' MUST match CreateTimelineEntry's drawn font (12*scale), or autofit under-measures and columns overflow
-Private Const FS_LABEL      As Single = 14
+Private Const FS_LABEL      As Single = 12      ' fixed datebar label size (NOT scaled by autofit)
 Private Const MIN_SCALE     As Single = 0.55
 Private Const BORDER_PT     As Single = 1.5
 Private Const MAX_COLS      As Long = 75        ' PowerPoint table / practical column ceiling
@@ -555,7 +555,7 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
     If sc > 1 Then sc = 1
 
     Dim bandBottom As Single
-    bandBottom = BAND_TOP + BAND_HEIGHT * sc
+    bandBottom = BAND_TOP + BAND_HEIGHT          ' band is fixed height; only the entries below scale
 
     DrawBar sld, pageCols, pn, colWArr, colLArr, sc, t, barColor
 
@@ -575,7 +575,7 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
     isGreen = (LCase$(barColor) = "green")
     ReDim cellNames(1 To pn)
     For ci = 1 To pn
-        Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLArr(ci), BAND_TOP, colWArr(ci), BAND_HEIGHT * sc)
+        Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLArr(ci), BAND_TOP, colWArr(ci), BAND_HEIGHT)
         StyleBandCell sh, GetSegmentLabel(t, pageCols(ci)), sc, isGreen
         sh.Name = SHAPE_PREFIX & "_BandCell_" & ci & "_" & sld.SlideIndex
         cellNames(ci) = sh.Name
@@ -585,8 +585,8 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
     ' boundaryX = the shared edge between column ci and ci+1 = colLArr(ci+1).
     For ci = 1 To pn - 1
         If DateAdd(IntervalCode(t), 1, pageCols(ci)) <> pageCols(ci + 1) Then
-            ApplyTear sld, cellNames(ci), True, colLArr(ci + 1), sc       ' TearA: left cell's right edge
-            ApplyTear sld, cellNames(ci + 1), False, colLArr(ci + 1), sc  ' TearB (rot 180): right cell's left edge
+            ApplyTear sld, cellNames(ci), True, colLArr(ci + 1), BAND_HEIGHT / 30!       ' TearA: left cell's right edge
+            ApplyTear sld, cellNames(ci + 1), False, colLArr(ci + 1), BAND_HEIGHT / 30!  ' TearB (rot 180): right cell's left edge
         End If
     Next ci
 
@@ -626,7 +626,7 @@ Private Sub StyleBandCell(ByVal sh As Shape, ByVal label As String, ByVal sc As 
         With .TextRange
             .text = label
             .Font.Name = "Arial"
-            .Font.Size = FS_LABEL * sc
+            .Font.Size = FS_LABEL
             .Font.bold = msoTrue
             .Font.Color.RGB = RGB(255, 255, 255)
             .ParagraphFormat.Alignment = ppAlignCenter
