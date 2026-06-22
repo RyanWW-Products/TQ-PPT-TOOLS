@@ -1,5 +1,5 @@
 {
-  "addinVersion": "5.5.1",
+  "addinVersion": "5.5.3",
   "assetsVersion": 1,
-  "notes": "Timeline Creator: import an Excel or CSV timeline as a DateBar band with real Make-Entry entries and an auto-suggested unit; weighted (event-count) column widths, multi-lane packing for busy periods, and a torn bar at gaps. New Timeline Edits menu: Tear Gap, Toggle Weighted Timeline, Space Evenly with Leaders, and a Copilot prompt that converts any PDF/Word/Excel timeline into the import format. Reads a Bates/document-number column. Calendar: single month or a date range."
+  "notes": "New Timeline Edits: Z Axis Fix (leaders behind boxes), Date Snap (align leaders to the datebar), Place Entry at Top; plus Formats > Auto Center. Entries use date-encoded shape names and show MMM D dates (year shown on the bar); both makers now draw on the current slide, and the edit tools work on a copied timeline. Includes the 5.5.1 set: weighted/tiered column widths, multi-lane packing, torn bar at gaps, Tear Gap, Toggle Weighted Timeline, Space Evenly, the Copilot conversion prompt, a Bates/document column, and Excel/CSV import."
 }
