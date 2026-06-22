@@ -12,10 +12,29 @@ Sub EntryGenerator(control As IRibbonControl)
         Exit Sub
     End If
     Set oSlide = ActiveWindow.Selection.SlideRange(1)
+    ' Manual entry: no real date, so name it with a sequential counter (TimelineEntry 0001, 0002, ...)
+    Dim manualSuffix As String
+    manualSuffix = Format$(NextManualEntryNumber(oSlide), "0000")
     ' lineX/lineTopY < 0 -> Make-Entry default (centered, 50pt stub above)
     CreateTimelineEntry oSlide, "12/12/2099", "Lorem Ipsum", 100, 100, 2 * 72, _
-                        -1, -1, False, 1, dummy, CDate("12/12/2099"), "Days"
+                        -1, -1, False, 1, dummy, CDate("12/12/2099"), "Days", manualSuffix
 End Sub
+
+' Next sequential number for a manual entry on this slide ("TimelineEntry 0001", "0002", ...).
+' Date-named imported entries are ignored (their suffix contains spaces, so isn't numeric).
+Private Function NextManualEntryNumber(ByVal oSlide As slide) As Long
+    Dim shp As Shape, mx As Long, suff As String
+    mx = 0
+    For Each shp In oSlide.Shapes
+        If Left$(shp.Name, 14) = "TimelineEntry " Then
+            suff = Mid$(shp.Name, 15)
+            If IsNumeric(suff) Then
+                If CLng(suff) > mx Then mx = CLng(suff)
+            End If
+        End If
+    Next shp
+    NextManualEntryNumber = mx + 1
+End Function
 
 ' Build one entry; return the final group. lineX/lineTopY >= 0 place the leader
 ' line exactly there (the Timeline Creator passes a date-accurate X + bar bottom);
@@ -25,12 +44,17 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         ByVal boxLeft As Single, ByVal boxTop As Single, ByVal boxW As Single, _
         ByVal lineX As Single, ByVal lineTopY As Single, ByVal fixedWidth As Boolean, _
         ByVal fontScale As Single, ByRef boxesHeight As Single, _
-        ByVal entryDate As Date, ByVal unitType As String) As Shape
+        ByVal entryDate As Date, ByVal unitType As String, _
+        Optional ByVal nameOverride As String = "") As Shape
     Static lineCounter As Long
     Dim oDateBox As Shape, oEntryBox As Shape, oBoxGroup As Shape, oLine As Shape, entryGroup As Shape
     Dim suffix As String
     lineCounter = lineCounter + 1
-    suffix = DateNameSuffix(entryDate, unitType)
+    If nameOverride <> "" Then          ' manual entry: counter suffix (no real date to encode)
+        suffix = nameOverride
+    Else
+        suffix = DateNameSuffix(entryDate, unitType)
+    End If
 
     ' Date box (navy fill, white bold text)
     Set oDateBox = oSlide.Shapes.AddTextbox(msoTextOrientationHorizontal, boxLeft, boxTop, boxW, 50)
