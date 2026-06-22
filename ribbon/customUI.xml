@@ -15,7 +15,7 @@
          </group >
           <group id="SampleGroup2" label="Calendar"> 
            <button id="ButtonB1" label="Make Calendar" size="large" onAction="CalendarGenerator" image="Calendar"/> 
-           <button id="ButtonB2" label="Add Entries" size="large" onAction="AddEntry" image="CalendarEntry"/>
+           <button id="ButtonB2" label="Entry Manager" size="large" onAction="OpenEntryManager" image="CalendarEntry" screentip="Entry Manager" supertip="Add and manage calendar entries across months and years, organize them into named color groups, and show a per-month legend."/>
            <button id="ButtonB3" label="Toggle Edit" size="large" onAction="ToggleTableLayer" image="CalendarEdit"/>
          </group > 
            <group id="SampleGroupC" label="Timeline"> 

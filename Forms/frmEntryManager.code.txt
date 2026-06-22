@@ -1,0 +1,614 @@
+' ============================================================================
+' frmEntryManager - code-behind for the Calendar Entry Manager.
+' ============================================================================
+' HOW TO USE: in the VBE, Insert > UserForm, rename it to  frmEntryManager .
+' Lay out the controls per the spec (see the chat message / the control list
+' below), then open the form's code window and paste EVERYTHING below this
+' header. The form calls the EntryManager + EntryGroups standard modules.
+'
+' CONTROLS EXPECTED (exact names):
+'   Top strip:  cboGroup(ComboBox,Style=2-DropDownList)  lblSwatch(Label)
+'               cmdNewGroup cmdRenameGroup cmdDeleteGroup (CommandButtons)
+'               cboColor(ComboBox,Style=2)  cmdRecolor(CommandButton)
+'               cmdMoveUp cmdMoveDown (CommandButtons)
+'               chkLegend(CheckBox)  txtFontSize(TextBox)  spnFontSize(SpinButton)
+'   mpgMain (MultiPage), 3 pages:
+'     PAGE 1 "Add / Edit Dates":  lblHint(Label)  txtDates(TextBox,MultiLine=True,
+'               EnterKeyBehavior=True,ScrollBars=2)  lblPreview(Label)
+'               cmdValidate cmdAddDates (CommandButtons)  lstIssues(ListBox)
+'     PAGE 2 "Month Grid":  cmdPrevMonth cmdNextMonth (CommandButtons)  lblMonth(Label)
+'               fraGrid(Frame)  lblGridClick(Label - placed INSIDE fraGrid; it is
+'               auto-sized/raised in code to catch clicks)
+'     PAGE 3 "All Entries":  lstEntries(ListBox,MultiSelect=1-fmMultiSelectMulti)
+'               cboRowGroup(ComboBox,Style=2)  txtRowLabel(TextBox)
+'               cmdUpdateRow cmdDeleteSel cmdRefresh (CommandButtons)
+'   Bottom:  cmdClose(CommandButton)
+'
+' If you want to ship the core first WITHOUT the grid, simply omit PAGE 2 and the
+' four grid-only subs (BuildGrid, RefreshGrid, GotoAdjacentMonth, lblGridClick_MouseDown,
+' cmdPrevMonth_Click, cmdNextMonth_Click) - everything else stands alone.
+' ============================================================================
+Option Explicit
+
+Private reg As Object
+Private entArr As Variant            ' 1-based rows parallel to lstEntries (0-based)
+Private gridYear As Long, gridMonth As Long
+Private gridStartDay As Integer, gridDaysInMonth As Long
+Private cellW As Single, cellH As Single, headerH As Single
+Private gridBuilt As Boolean
+Private suppress As Boolean
+Private Const GRID_COLS As Integer = 7
+Private Const GRID_ROWS As Integer = 6
+
+' ---------------------------------------------------------------- init
+Private Sub UserForm_Initialize()
+    Dim s As slide, i As Long
+    Me.Caption = "Entry Manager"
+    Set reg = LoadRegistry()
+    EnsureDefaultGroup reg
+    SaveRegistry reg
+
+    suppress = True
+    ' color picker
+    cboColor.Clear
+    Dim pn As Variant: pn = PaletteNames()
+    For i = LBound(pn) To UBound(pn)
+        cboColor.AddItem pn(i)
+    Next i
+    PopulateGroupList
+    If cboGroup.ListCount > 0 Then cboGroup.ListIndex = 0
+    chkLegend.Value = LegendOn(reg)
+    spnFontSize.Min = 6: spnFontSize.Max = 36
+    spnFontSize.Value = CLng(LegendFontSize(reg))
+    txtFontSize.Text = CStr(CLng(LegendFontSize(reg)))
+    lblHint.Caption = "A year on its own line (2024) sticks until the next year line." & vbCrLf & _
+                      "Then  Mar: 3,7,14-16  (or paste M/D / M/D/YYYY dates)."
+    mpgMain.Value = 0
+
+    Set s = FirstCalendarSlide()
+    If Not s Is Nothing Then gridYear = CalYearOf(s): gridMonth = CalMonthOf(s)
+    suppress = False
+
+    UpdateSwatch
+    BuildGrid
+    RefreshGrid
+    RefreshEntries
+End Sub
+
+' ---------------------------------------------------------------- group strip
+Private Function ActiveGroup() As String
+    If cboGroup.ListIndex >= 0 Then ActiveGroup = cboGroup.Value
+End Function
+
+Private Sub PopulateGroupList()
+    Dim names As Variant, i As Long
+    cboGroup.Clear
+    PopulateRowGroupList
+    names = GroupNamesInOrder(reg)
+    For i = LBound(names) To UBound(names)
+        cboGroup.AddItem names(i)
+    Next i
+End Sub
+
+Private Sub PopulateRowGroupList()
+    Dim names As Variant, i As Long
+    cboRowGroup.Clear
+    names = GroupNamesInOrder(reg)
+    For i = LBound(names) To UBound(names)
+        cboRowGroup.AddItem names(i)
+    Next i
+End Sub
+
+Private Sub SelectGroup(ByVal nm As String)
+    Dim i As Long
+    For i = 0 To cboGroup.ListCount - 1
+        If StrComp(cboGroup.List(i), nm, vbTextCompare) = 0 Then cboGroup.ListIndex = i: Exit Sub
+    Next i
+End Sub
+
+Private Sub SelectInCombo(cbo As MSForms.ComboBox, ByVal nm As String)
+    Dim i As Long
+    For i = 0 To cbo.ListCount - 1
+        If StrComp(cbo.List(i), nm, vbTextCompare) = 0 Then cbo.ListIndex = i: Exit Sub
+    Next i
+End Sub
+
+Private Sub UpdateSwatch()
+    Dim c As Long
+    c = GroupColor(reg, ActiveGroup())
+    If c = 0 Then c = RGB(255, 255, 255)
+    lblSwatch.BackColor = c
+End Sub
+
+Private Sub cboGroup_Change()
+    If suppress Then Exit Sub
+    UpdateSwatch
+    RefreshGrid
+End Sub
+
+Private Sub cmdNewGroup_Click()
+    Dim nm As String, added As String
+    nm = InputBox("New group name:", "New Group")
+    If Trim(nm) = "" Then Exit Sub
+    nm = SanitizeGroupName(nm)
+    If nm = "" Then Exit Sub
+    If GroupExists(reg, nm) Then MsgBox "That group already exists.", vbExclamation: Exit Sub
+    added = AddGroup(reg, nm)
+    SaveRegistry reg
+    PopulateGroupList
+    SelectGroup added
+    UpdateSwatch
+End Sub
+
+Private Sub cmdRenameGroup_Click()
+    Dim old As String, nm As String
+    old = ActiveGroup()
+    If old = "" Then Exit Sub
+    nm = InputBox("Rename group '" & old & "' to:", "Rename Group", old)
+    If Trim(nm) = "" Then Exit Sub
+    nm = SanitizeGroupName(nm)
+    If nm = "" Then Exit Sub
+    If StrComp(nm, old, vbTextCompare) = 0 Then Exit Sub
+    If GroupExists(reg, nm) Then MsgBox "That name is taken.", vbExclamation: Exit Sub
+    RenameGroupKey reg, old, nm
+    RetagGroupShapes old, nm
+    SaveRegistry reg
+    DrawAllLegends reg
+    PopulateGroupList
+    SelectGroup nm
+    UpdateSwatch
+    RefreshEntries
+End Sub
+
+Private Sub cmdRecolor_Click()
+    Dim nm As String
+    nm = ActiveGroup()
+    If nm = "" Then Exit Sub
+    If cboColor.ListIndex < 0 Then MsgBox "Pick a color first.", vbExclamation: Exit Sub
+    SetGroupColor reg, nm, PaletteColor(cboColor.ListIndex)
+    RecolorGroupShapes reg, nm
+    SaveRegistry reg
+    UpdateSwatch
+    DrawAllLegends reg
+    RefreshGrid
+End Sub
+
+Private Sub cmdDeleteGroup_Click()
+    Dim nm As String, r As VbMsgBoxResult
+    nm = ActiveGroup()
+    If nm = "" Then Exit Sub
+    If GroupCount(reg) <= 1 Then MsgBox "Can't delete the only group.", vbExclamation: Exit Sub
+    r = MsgBox("Delete group '" & nm & "'?" & vbCrLf & vbCrLf & _
+        "Yes = also delete its entries" & vbCrLf & _
+        "No = reassign its entries to '" & DEFAULT_GROUP & "'" & vbCrLf & _
+        "Cancel = abort", vbYesNoCancel + vbExclamation, "Delete Group")
+    If r = vbCancel Then Exit Sub
+    If r = vbNo Then
+        If Not GroupExists(reg, DEFAULT_GROUP) Then AddGroup reg, DEFAULT_GROUP
+    End If
+    DeleteGroupEverywhere reg, nm, (r = vbYes)
+    PopulateGroupList
+    If cboGroup.ListCount > 0 Then cboGroup.ListIndex = 0
+    UpdateSwatch
+    RefreshGrid
+    RefreshEntries
+End Sub
+
+Private Sub cmdMoveUp_Click()
+    MoveGroup -1
+End Sub
+Private Sub cmdMoveDown_Click()
+    MoveGroup 1
+End Sub
+Private Sub MoveGroup(ByVal delta As Integer)
+    Dim nm As String, names As Variant, idx As Long, i As Long, j As Long, oi As Long, oj As Long
+    nm = ActiveGroup()
+    If nm = "" Then Exit Sub
+    names = GroupNamesInOrder(reg)
+    idx = -1
+    For i = LBound(names) To UBound(names)
+        If StrComp(names(i), nm, vbTextCompare) = 0 Then idx = i: Exit For
+    Next i
+    j = idx + delta
+    If idx < 0 Or j < LBound(names) Or j > UBound(names) Then Exit Sub
+    oi = GroupOrder(reg, CStr(names(idx)))
+    oj = GroupOrder(reg, CStr(names(j)))
+    SetGroupOrder reg, CStr(names(idx)), oj
+    SetGroupOrder reg, CStr(names(j)), oi
+    SaveRegistry reg
+    DrawAllLegends reg
+    PopulateGroupList
+    SelectGroup nm
+    UpdateSwatch
+End Sub
+
+' ---------------------------------------------------------------- legend controls
+Private Sub chkLegend_Click()
+    If suppress Then Exit Sub
+    SetLegendOn reg, (chkLegend.Value = True)
+    SaveRegistry reg
+    DrawAllLegends reg
+End Sub
+
+Private Sub spnFontSize_Change()
+    Dim sz As Long
+    If suppress Then Exit Sub
+    sz = spnFontSize.Value
+    txtFontSize.Text = CStr(sz)
+    SetLegendFontSize reg, sz
+    SaveRegistry reg
+    DrawAllLegends reg
+End Sub
+
+Private Sub txtFontSize_AfterUpdate()
+    Dim sz As Long
+    If suppress Then Exit Sub
+    If Not IsNumeric(txtFontSize.Text) Then Exit Sub
+    sz = CLng(txtFontSize.Text)
+    If sz < 6 Then sz = 6
+    If sz > 36 Then sz = 36
+    spnFontSize.Value = sz       ' fires spnFontSize_Change (persists + redraws)
+End Sub
+
+' ---------------------------------------------------------------- Add/Edit Dates page
+Private Function DefaultYearForBuffer() As Long
+    Dim s As slide
+    If gridYear > 0 Then DefaultYearForBuffer = gridYear: Exit Function
+    Set s = FirstCalendarSlide()
+    If Not s Is Nothing Then DefaultYearForBuffer = CalYearOf(s)
+End Function
+
+Private Function CountMonths(od As Collection) As Long
+    Dim d As Object, k As Long, it As Variant, key As String
+    Set d = CreateObject("Scripting.Dictionary")
+    For k = 1 To od.count
+        it = od(k)
+        key = it(0) & "-" & it(1)
+        If Not d.Exists(key) Then d.Add key, True
+    Next k
+    CountMonths = d.count
+End Function
+
+Private Sub txtDates_Change()
+    Dim od As Collection, oe As Collection
+    If suppress Then Exit Sub
+    ParseBuffer txtDates.text, DefaultYearForBuffer(), od, oe
+    lblPreview.Caption = od.count & " dates / " & CountMonths(od) & " months / " & oe.count & " parse errors"
+End Sub
+
+Private Sub cmdValidate_Click()
+    Dim od As Collection, oe As Collection, k As Long, it As Variant
+    Dim missing As Object, key As String, mk As Variant
+    ParseBuffer txtDates.text, DefaultYearForBuffer(), od, oe
+    lstIssues.Clear
+    Set missing = CreateObject("Scripting.Dictionary")
+    missing.CompareMode = vbTextCompare
+    For k = 1 To od.count
+        it = od(k)
+        If FindMonthSlide(CLng(it(0)), CLng(it(1))) Is Nothing Then
+            key = MonthName(CLng(it(1)), True) & " " & it(0)
+            If Not missing.Exists(key) Then missing.Add key, True
+        End If
+    Next k
+    For k = 1 To oe.count
+        lstIssues.AddItem oe(k)
+    Next k
+    For Each mk In missing.Keys
+        lstIssues.AddItem "No calendar slide for " & mk & " (create it with Make Calendar)."
+    Next mk
+    lblPreview.Caption = od.count & " dates / " & CountMonths(od) & " months / " & _
+                         (oe.count + missing.count) & " issues"
+    If lstIssues.ListCount = 0 Then lstIssues.AddItem "No problems found - ready to add."
+End Sub
+
+Private Sub cmdAddDates_Click()
+    Dim grp As String, od As Collection, oe As Collection
+    Dim added As Long, dup As Long, full As Long, noSlide As Collection
+    Dim m As String, s As String, i As Long
+    grp = ActiveGroup()
+    If grp = "" Then MsgBox "Pick a group first.", vbExclamation: Exit Sub
+    ParseBuffer txtDates.text, DefaultYearForBuffer(), od, oe
+    If od.count = 0 Then MsgBox "No dates parsed. Check the format.", vbExclamation: Exit Sub
+    If oe.count > 0 Then
+        If MsgBox(oe.count & " line(s) couldn't be parsed and will be skipped. Add the rest?", _
+                  vbYesNo + vbQuestion, "Entry Manager") <> vbYes Then Exit Sub
+    End If
+    AddParsedDates od, grp, reg, added, dup, full, noSlide
+    m = "Added " & added & " entr" & IIf(added = 1, "y", "ies") & " to '" & grp & "'."
+    If dup > 0 Then m = m & vbCrLf & dup & " skipped (already in this group)."
+    If full > 0 Then m = m & vbCrLf & full & " skipped (day already has 4 entries)."
+    If Not noSlide Is Nothing Then
+        If noSlide.count > 0 Then
+            For i = 1 To noSlide.count
+                s = s & vbCrLf & "  - " & noSlide(i)
+            Next i
+            m = m & vbCrLf & "No calendar slide exists for:" & s
+        End If
+    End If
+    MsgBox m, vbInformation, "Entry Manager"
+    RefreshGrid
+    RefreshEntries
+End Sub
+
+' ---------------------------------------------------------------- Month Grid page
+Private Sub BuildGrid()
+    Dim i As Integer, c As Integer, r As Integer, lbl As MSForms.Label, wdays As Variant
+    If gridBuilt Then Exit Sub
+    On Error GoTo NoGrid          ' page 2 may be omitted in a core-only build
+    wdays = Array("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+    headerH = 14
+    cellW = fraGrid.InsideWidth / GRID_COLS
+    cellH = (fraGrid.InsideHeight - headerH) / GRID_ROWS
+    For c = 0 To GRID_COLS - 1
+        Set lbl = fraGrid.Controls.Add("Forms.Label.1", "hdr" & c, True)
+        lbl.Caption = wdays(c)
+        lbl.Left = c * cellW: lbl.Top = 0: lbl.Width = cellW: lbl.Height = headerH
+        lbl.TextAlign = fmTextAlignCenter
+        lbl.Font.Bold = True
+        lbl.Enabled = False
+    Next c
+    For i = 0 To GRID_ROWS * GRID_COLS - 1
+        c = i Mod GRID_COLS: r = i \ GRID_COLS
+        Set lbl = fraGrid.Controls.Add("Forms.Label.1", "cell" & i, True)
+        lbl.Left = c * cellW: lbl.Top = headerH + r * cellH
+        lbl.Width = cellW: lbl.Height = cellH
+        lbl.TextAlign = fmTextAlignCenter
+        lbl.BorderStyle = fmBorderStyleSingle
+        lbl.Enabled = False
+    Next i
+    lblGridClick.Left = 0: lblGridClick.Top = 0
+    lblGridClick.Width = fraGrid.InsideWidth: lblGridClick.Height = fraGrid.InsideHeight
+    lblGridClick.BackStyle = fmBackStyleTransparent
+    lblGridClick.Caption = ""
+    lblGridClick.ZOrder 0         ' bring the click-catcher to the front
+    gridBuilt = True
+    Exit Sub
+NoGrid:
+End Sub
+
+Private Sub RefreshGrid()
+    Dim i As Integer, dayNum As Integer, lbl As MSForms.Label, sld As slide, grp As String
+    If Not gridBuilt Then Exit Sub
+    On Error GoTo Done
+    If gridYear = 0 Or gridMonth = 0 Then
+        lblMonth.Caption = "(no calendar slide)"
+        For i = 0 To GRID_ROWS * GRID_COLS - 1
+            Set lbl = fraGrid.Controls("cell" & i)
+            lbl.Caption = "": lbl.BackColor = RGB(240, 240, 240)
+        Next i
+        Exit Sub
+    End If
+    lblMonth.Caption = MonthName(gridMonth, False) & " " & gridYear
+    gridStartDay = Weekday(DateSerial(gridYear, gridMonth, 1), vbSunday)
+    gridDaysInMonth = DaysInMonth(gridYear, gridMonth)
+    Set sld = FindMonthSlide(gridYear, gridMonth)
+    grp = ActiveGroup()
+    For i = 0 To GRID_ROWS * GRID_COLS - 1
+        Set lbl = fraGrid.Controls("cell" & i)
+        dayNum = i - (gridStartDay - 1) + 1
+        If dayNum < 1 Or dayNum > gridDaysInMonth Then
+            lbl.Caption = "": lbl.BackColor = RGB(240, 240, 240)
+        Else
+            lbl.Caption = CStr(dayNum)
+            If sld Is Nothing Then
+                lbl.BackColor = RGB(255, 255, 255)
+            ElseIf DayHasGroup(sld, dayNum, grp) Then
+                lbl.BackColor = GroupColor(reg, grp)
+            ElseIf DayHasAnyEntry(sld, dayNum) Then
+                lbl.BackColor = RGB(215, 215, 215)
+            Else
+                lbl.BackColor = RGB(255, 255, 255)
+            End If
+        End If
+    Next i
+Done:
+End Sub
+
+Private Sub cmdPrevMonth_Click()
+    GotoAdjacentMonth -1
+End Sub
+Private Sub cmdNextMonth_Click()
+    GotoAdjacentMonth 1
+End Sub
+Private Sub GotoAdjacentMonth(ByVal delta As Integer)
+    Dim months As Collection, i As Long, curIdx As Long, j As Long
+    Set months = CalendarMonthsSorted()
+    If months.count = 0 Then Exit Sub
+    curIdx = -1
+    For i = 1 To months.count
+        If months(i)(0) = gridYear And months(i)(1) = gridMonth Then curIdx = i: Exit For
+    Next i
+    If curIdx = -1 Then
+        j = 1
+    Else
+        j = curIdx + delta
+    End If
+    If j < 1 Then j = 1
+    If j > months.count Then j = months.count
+    gridYear = months(j)(0): gridMonth = months(j)(1)
+    RefreshGrid
+End Sub
+
+Private Function CalendarMonthsSorted() As Collection
+    Dim sld As slide, seen As Object, names As Collection, n As Long
+    Dim arr() As Variant, i As Long, j As Long, tmp As Variant, outc As Collection, k As String
+    Set names = New Collection
+    Set seen = CreateObject("Scripting.Dictionary")
+    For Each sld In ActivePresentation.Slides
+        If IsCalendarSlide(sld) Then
+            k = CalYearOf(sld) & "-" & CalMonthOf(sld)
+            If Not seen.Exists(k) Then
+                seen.Add k, True
+                names.Add Array(CalYearOf(sld), CalMonthOf(sld))
+            End If
+        End If
+    Next sld
+    n = names.count
+    Set outc = New Collection
+    If n = 0 Then Set CalendarMonthsSorted = outc: Exit Function
+    ReDim arr(1 To n)
+    For i = 1 To n
+        arr(i) = names(i)
+    Next i
+    For i = 2 To n
+        tmp = arr(i): j = i - 1
+        Do While j >= 1
+            If (arr(j)(0) * 12 + arr(j)(1)) <= (tmp(0) * 12 + tmp(1)) Then Exit Do
+            arr(j + 1) = arr(j): j = j - 1
+        Loop
+        arr(j + 1) = tmp
+    Next i
+    For i = 1 To n
+        outc.Add arr(i)
+    Next i
+    Set CalendarMonthsSorted = outc
+End Function
+
+Private Sub lblGridClick_MouseDown(ByVal Button As Integer, ByVal Shift As Integer, ByVal X As Single, ByVal Y As Single)
+    Dim c As Integer, r As Integer, idx As Integer, dayNum As Integer, grp As String, sld As slide, msg As String
+    If gridYear = 0 Or gridMonth = 0 Then Exit Sub
+    If Y < headerH Then Exit Sub
+    c = Int(X / cellW)
+    r = Int((Y - headerH) / cellH)
+    If c < 0 Or c > GRID_COLS - 1 Or r < 0 Or r > GRID_ROWS - 1 Then Exit Sub
+    idx = r * GRID_COLS + c
+    dayNum = idx - (gridStartDay - 1) + 1
+    If dayNum < 1 Or dayNum > gridDaysInMonth Then Exit Sub
+    grp = ActiveGroup()
+    If grp = "" Then Exit Sub
+    Set sld = FindMonthSlide(gridYear, gridMonth)
+    If sld Is Nothing Then Exit Sub
+    ToggleDay sld, gridYear, gridMonth, dayNum, grp, reg, msg
+    RefreshGrid
+    RefreshEntries
+End Sub
+
+' ---------------------------------------------------------------- All Entries page
+Private Function SortKey(it As Variant) As Long
+    SortKey = CLng(it(1)) * 10000 + CLng(it(2)) * 100 + CLng(it(3))
+End Function
+
+Private Sub RefreshEntries()
+    Dim col As Collection, n As Long, i As Long, j As Long, tmp As Variant, a() As Variant
+    Set col = ScanEntries(reg)
+    n = col.count
+    lstEntries.Clear
+    PopulateRowGroupList
+    If n = 0 Then entArr = Array(): Exit Sub
+    ReDim a(1 To n)
+    For i = 1 To n
+        a(i) = col(i)
+    Next i
+    For i = 2 To n
+        tmp = a(i): j = i - 1
+        Do While j >= 1
+            If SortKey(a(j)) <= SortKey(tmp) Then Exit Do
+            a(j + 1) = a(j): j = j - 1
+        Loop
+        a(j + 1) = tmp
+    Next i
+    For i = 1 To n
+        lstEntries.AddItem Format(a(i)(1), "0000") & "-" & Format(a(i)(2), "00") & "-" & _
+                           Format(a(i)(3), "00") & "   " & a(i)(4) & "   " & a(i)(5)
+    Next i
+    entArr = a
+End Sub
+
+Private Function SingleSelectedIndex() As Long
+    Dim i As Long, found As Long, cnt As Long
+    found = -1
+    For i = 0 To lstEntries.ListCount - 1
+        If lstEntries.Selected(i) Then found = i: cnt = cnt + 1
+    Next i
+    If cnt = 1 Then SingleSelectedIndex = found Else SingleSelectedIndex = -1
+End Function
+
+Private Sub lstEntries_Change()
+    Dim sel As Long, it As Variant
+    sel = SingleSelectedIndex()
+    If sel < 0 Then Exit Sub
+    it = entArr(sel + 1)
+    txtRowLabel.text = it(5)
+    SelectInCombo cboRowGroup, CStr(it(4))
+End Sub
+
+Private Sub cmdUpdateRow_Click()
+    Dim sel As Long, it As Variant, sld As slide, shp As Shape, ng As String
+    sel = SingleSelectedIndex()
+    If sel < 0 Then MsgBox "Select exactly one entry to update.", vbExclamation: Exit Sub
+    it = entArr(sel + 1)
+    Set sld = ActivePresentation.Slides(CLng(it(0)))
+    On Error Resume Next
+    Set shp = sld.Shapes(CStr(it(6)))
+    On Error GoTo 0
+    If shp Is Nothing Then
+        MsgBox "That entry couldn't be found (it may have changed). Refreshing.", vbExclamation
+        RefreshEntries
+        Exit Sub
+    End If
+    SetEntryLabelText shp, txtRowLabel.text
+    If cboRowGroup.ListIndex >= 0 Then
+        ng = cboRowGroup.Value
+        If StrComp(ng, CStr(it(4)), vbTextCompare) <> 0 Then SetEntryGroupOf shp, ng, reg
+    End If
+    DrawLegend sld, reg
+    RefreshEntries
+    RefreshGrid
+End Sub
+
+Private Sub cmdDeleteSel_Click()
+    Dim i As Long, it As Variant, sld As slide, shp As Shape
+    Dim shapes As Collection, affDays As Object, rec As Variant
+    Dim ak As Variant, rr As Variant, slidesSeen As Object, ss As Variant
+    Set shapes = New Collection
+    For i = 0 To lstEntries.ListCount - 1
+        If lstEntries.Selected(i) Then
+            it = entArr(i + 1)
+            Set sld = ActivePresentation.Slides(CLng(it(0)))
+            Set shp = Nothing
+            On Error Resume Next
+            Set shp = sld.Shapes(CStr(it(6)))
+            On Error GoTo 0
+            If Not shp Is Nothing Then shapes.Add Array(shp, sld.SlideIndex, DayOfEntry(shp))
+        End If
+    Next i
+    If shapes.count = 0 Then MsgBox "Select one or more entries to delete.", vbExclamation: Exit Sub
+    If MsgBox("Delete " & shapes.count & " selected entr" & IIf(shapes.count = 1, "y", "ies") & "?", _
+              vbYesNo + vbExclamation, "Entry Manager") <> vbYes Then Exit Sub
+
+    Set affDays = CreateObject("Scripting.Dictionary")
+    For i = 1 To shapes.count
+        rec = shapes(i)
+        affDays(rec(1) & "_" & rec(2)) = Array(rec(1), rec(2))
+        rec(0).Delete
+    Next i
+    Set slidesSeen = CreateObject("Scripting.Dictionary")
+    For Each ak In affDays.Keys
+        rr = affDays(ak)
+        CompactDaySuffixes ActivePresentation.Slides(CLng(rr(0))), CLng(rr(1)), reg
+        slidesSeen(rr(0)) = True
+    Next ak
+    For Each ss In slidesSeen.Keys
+        DrawLegend ActivePresentation.Slides(CLng(ss)), reg
+    Next ss
+    RefreshEntries
+    RefreshGrid
+End Sub
+
+Private Sub cmdRefresh_Click()
+    RefreshEntries
+End Sub
+
+' ---------------------------------------------------------------- close
+Private Sub cmdClose_Click()
+    On Error Resume Next
+    SaveRegistry reg
+    On Error GoTo 0
+    Unload Me
+End Sub
+
+Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
+    On Error Resume Next
+    SaveRegistry reg
+    On Error GoTo 0
+End Sub
