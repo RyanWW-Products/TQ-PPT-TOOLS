@@ -144,25 +144,40 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
     Set CreateTimelineEntry = entryGroup
 End Function
 
-' Rename the parts of a freshly-built entry group to the date-encoded scheme, using live
-' references taken from the group itself (the pre-grouping ones can be stale). Date vs entry
-' box is told apart by the GroupStyle tag; the leader line by its name prefix.
+' Rename every part of a freshly-built entry group to the date-encoded scheme. Collect the
+' descendants FIRST, then rename: renaming a shape while a GroupItems For Each is live derails
+' that enumeration (PowerPoint re-indexes the collection by name), which left every child but
+' the parent un-renamed. References pulled from the group are live; the original pre-grouping
+' ones can be stale (two levels deep -> 424), so we never reuse those. Date vs entry box is
+' told apart by the GroupStyle tag, the box group by its type, the leader by its name prefix.
 Private Sub RenameEntryParts(ByVal entryGroup As Shape, ByVal suffix As String)
-    Dim child As Shape, gc As Shape
     entryGroup.name = "TimelineEntry " & suffix
-    For Each child In entryGroup.GroupItems
-        If child.Type = msoGroup Then
-            child.name = "BoxGroup " & suffix
-            For Each gc In child.GroupItems
-                Select Case ShapeTag(gc, "GroupStyle")
-                    Case "Date Box": gc.name = "DateBox " & suffix
-                    Case "Entry Box": gc.name = "Entry Box " & suffix
-                End Select
-            Next gc
-        ElseIf child.name Like "LeadingLine*" Then
-            child.name = "LeadingLine " & suffix
+    Dim parts As Collection
+    Set parts = New Collection
+    CollectDescendants entryGroup, parts
+    Dim shp As Shape
+    For Each shp In parts
+        If shp.Type = msoGroup Then
+            shp.name = "BoxGroup " & suffix
+        ElseIf shp.name Like "LeadingLine*" Then
+            shp.name = "LeadingLine " & suffix
+        ElseIf ShapeTag(shp, "GroupStyle") = "Date Box" Then
+            shp.name = "DateBox " & suffix
+        ElseIf ShapeTag(shp, "GroupStyle") = "Entry Box" Then
+            shp.name = "Entry Box " & suffix
         End If
-    Next child
+    Next shp
+End Sub
+
+' Depth-first collect every descendant shape of a group into acc (a read-only walk, so the
+' caller can safely rename them afterward without disturbing a live GroupItems enumeration).
+Private Sub CollectDescendants(ByVal grp As Shape, ByVal acc As Collection)
+    Dim it As Shape
+    If grp.Type <> msoGroup Then Exit Sub
+    For Each it In grp.GroupItems
+        acc.Add it
+        If it.Type = msoGroup Then CollectDescendants it, acc
+    Next it
 End Sub
 
 Private Function ShapeTag(ByVal shp As Shape, ByVal key As String) As String
