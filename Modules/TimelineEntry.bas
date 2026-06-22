@@ -133,15 +133,42 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
     End With
     oLine.ZOrder msoSendToBack
 
-    ' group [boxes + line], then rename every part to the date-encoded scheme. Renaming AFTER
-    ' grouping means two entries on the same date can't collide on the names used to group.
+    ' group [boxes + line] using the still-unique auto names, then rename every part from
+    ' FRESH references walked out of the new group. Re-grouping invalidates the original child
+    ' references (the boxes are now two levels deep, so oDateBox.Name would raise 424
+    ' "Object required"), so we never touch oDateBox/oEntryBox/oBoxGroup/oLine again here.
+    ' Renaming after grouping (not before) also keeps two same-date entries from colliding on
+    ' the names used to group.
     Set entryGroup = oSlide.Shapes.range(Array(oBoxGroup.Name, oLine.Name)).Group
-    oDateBox.Name = "DateBox " & suffix
-    oEntryBox.Name = "Entry Box " & suffix
-    oBoxGroup.Name = "BoxGroup " & suffix
-    oLine.Name = "LeadingLine " & suffix
-    entryGroup.Name = "TimelineEntry " & suffix
+    RenameEntryParts entryGroup, suffix
     Set CreateTimelineEntry = entryGroup
+End Function
+
+' Rename the parts of a freshly-built entry group to the date-encoded scheme, using live
+' references taken from the group itself (the pre-grouping ones can be stale). Date vs entry
+' box is told apart by the GroupStyle tag; the leader line by its name prefix.
+Private Sub RenameEntryParts(ByVal entryGroup As Shape, ByVal suffix As String)
+    Dim child As Shape, gc As Shape
+    entryGroup.name = "TimelineEntry " & suffix
+    For Each child In entryGroup.GroupItems
+        If child.Type = msoGroup Then
+            child.name = "BoxGroup " & suffix
+            For Each gc In child.GroupItems
+                Select Case ShapeTag(gc, "GroupStyle")
+                    Case "Date Box": gc.name = "DateBox " & suffix
+                    Case "Entry Box": gc.name = "Entry Box " & suffix
+                End Select
+            Next gc
+        ElseIf child.name Like "LeadingLine*" Then
+            child.name = "LeadingLine " & suffix
+        End If
+    Next child
+End Sub
+
+Private Function ShapeTag(ByVal shp As Shape, ByVal key As String) As String
+    On Error Resume Next
+    ShapeTag = shp.Tags(key)
+    On Error GoTo 0
 End Function
 
 ' "YYYY MM DD HH MM" for a date, zeroing parts finer than the timeline unit

@@ -5,7 +5,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Ppam,
     [Parameter(Mandatory=$true)][string]$Module,
-    [string[]]$Contains = @()
+    [string[]]$Contains = @(),
+    [switch]$Dump
 )
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -126,6 +127,7 @@ if (-not $source){ Write-Output "COULD NOT DECOMPRESS SOURCE for $Module"; exit 
 
 $lines = ($source -split "`r?`n").Count
 Write-Output ("MODULE {0}: {1} source lines decompressed OK" -f $Module, $lines)
+if ($Dump){ Write-Output "----- BEGIN $Module -----"; Write-Output $source; Write-Output "----- END $Module -----" }
 foreach ($needle in $Contains){
     $present = $source -match [regex]::Escape($needle)
     Write-Output ("  [{0}] contains: {1}" -f ($(if($present){'YES'}else{'no '}), $needle))
