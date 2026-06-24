@@ -98,6 +98,16 @@ Private Function GetShapeTag(shp As Shape, ByVal name As String) As String
     On Error GoTo 0
 End Function
 
+' Local copy so EntryManager doesn't bind to the (ambiguous) public ShapeExists that
+' lives in CreateEntry / SnapLines / ToggleSuffixes. A module-local definition shadows them.
+Private Function ShapeExists(sld As slide, ByVal shapeName As String) As Boolean
+    Dim shp As Shape
+    On Error Resume Next
+    Set shp = sld.Shapes(shapeName)
+    On Error GoTo 0
+    ShapeExists = Not (shp Is Nothing)
+End Function
+
 Private Function GroupDayShape(sld As slide, ByVal dy As Long, ByVal groupName As String) As Shape
     Dim suf As Integer, nm As String, shp As Shape
     For suf = Asc("A") To Asc("D")
