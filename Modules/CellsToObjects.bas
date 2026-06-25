@@ -1,34 +1,40 @@
 Attribute VB_Name = "CellsToObjects"
+' Ribbon: convert the selected table into individual text boxes.
 Sub ConvertSelectedTableToTextBoxes(control As IRibbonControl)
-    Dim pptSlide As slide
-    Dim pptTable As Table
     Dim sel As Object
-    Dim i As Integer, j As Integer
-    Dim newTextBox As Shape
-    Dim cellText As String
-    Dim cellLeft As Single, cellTop As Single, cellWidth As Single, cellHeight As Single
-
-    ' Define a standard border color and weight
-    Dim standardBorderColor As Long
-    Dim standardBorderWeight As Single
-    standardBorderColor = RGB(0, 0, 0) ' Black color
-    standardBorderWeight = 1 ' 1 point
-
     Set sel = ActiveWindow.Selection
     If Not sel.Type = ppSelectionShapes Then
         MsgBox "No shape selected. Please select a table."
         Exit Sub
     End If
-
     If sel.ShapeRange.count <> 1 Or Not sel.ShapeRange(1).HasTable Then
         MsgBox "Selected shape is not a table. Please select a table."
         Exit Sub
     End If
+    ConvertTableToTextBoxes sel.ShapeRange(1), 0
+End Sub
 
-    Set pptSlide = sel.ShapeRange(1).parent
-    Set pptTable = sel.ShapeRange(1).Table
+' Convert a table shape into one text box per cell (preserving geometry / text / format),
+' delete the table, and return the new text boxes as a Collection. If fixedRowHeight > 0,
+' every row is set to that height first so a converted datebar has a consistent vertical size.
+Public Function ConvertTableToTextBoxes(ByVal tableShape As Shape, Optional ByVal fixedRowHeight As Single = 0, Optional ByVal cellDates As Variant) As Collection
+    Dim pptSlide As slide, pptTable As Table
+    Dim i As Integer, j As Integer
+    Dim newTextBox As Shape, cellText As String
+    Dim cellLeft As Single, cellTop As Single, cellWidth As Single, cellHeight As Single
+    Dim made As Collection, kk As Long, hasDates As Boolean
+    Set made = New Collection
+    hasDates = Not IsMissing(cellDates)
 
-    ' Loop through each cell in the table
+    Set pptSlide = tableShape.parent
+    Set pptTable = tableShape.Table
+
+    If fixedRowHeight > 0 Then
+        For i = 1 To pptTable.Rows.count
+            pptTable.Rows(i).Height = fixedRowHeight
+        Next i
+    End If
+
     For i = 1 To pptTable.Rows.count
         For j = 1 To pptTable.Columns.count
             With pptTable.cell(i, j).Shape
@@ -40,12 +46,11 @@ Sub ConvertSelectedTableToTextBoxes(control As IRibbonControl)
             End With
 
             Set newTextBox = pptSlide.Shapes.AddTextbox(msoTextOrientationHorizontal, cellLeft, cellTop, cellWidth, cellHeight)
-            
+
             With newTextBox.TextFrame
                 .AutoSize = ppAutoSizeNone
                 .parent.Height = cellHeight
-                .VerticalAnchor = msoAnchorMiddle  ' Vertically center the text
-
+                .VerticalAnchor = msoAnchorMiddle
                 With .TextRange
                     .text = cellText
                     .Font.Name = pptTable.cell(i, j).Shape.TextFrame.TextRange.Font.Name
@@ -70,13 +75,21 @@ Sub ConvertSelectedTableToTextBoxes(control As IRibbonControl)
             End If
 
             With newTextBox.line
-                .ForeColor.RGB = standardBorderColor
-                .Weight = standardBorderWeight
+                .ForeColor.RGB = RGB(0, 0, 0)
+                .Weight = 1
                 .Style = msoLineSingle
             End With
+
+            kk = kk + 1
+            If hasDates Then
+                On Error Resume Next
+                newTextBox.Tags.Add "TLCellDate", CStr(CDbl(cellDates(kk)))
+                On Error GoTo 0
+            End If
+            made.Add newTextBox
         Next j
     Next i
 
-    pptTable.parent.Delete
-End Sub
-
+    tableShape.Delete
+    Set ConvertTableToTextBoxes = made
+End Function

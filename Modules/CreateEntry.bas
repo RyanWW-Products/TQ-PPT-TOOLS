@@ -91,7 +91,7 @@ Sub CreateCalendarEntry(ByVal entryDay As Integer)
 
   ' Calculate the size and position of the new entry shape
 Dim cellShape As PowerPoint.Shape
-Set cellShape = slide.Shapes("CalendarTable").Table.cell(row, column).Shape
+Set cellShape = slide.Shapes("CalendarGrid").Table.cell(row, column).Shape
 Dim newEntry As PowerPoint.Shape
 Set newEntry = slide.Shapes.AddShape(msoShapeRectangle, _
     cellShape.Left, cellShape.Top, cellShape.Width, cellShape.Height)
@@ -175,7 +175,7 @@ End Function
 
 Sub ResizeAndPositionEntries(slide As PowerPoint.slide, ByVal row As Integer, ByVal column As Integer, ByVal totalEntries As Integer, ByVal entryDay As Integer)
     Dim cellShape As PowerPoint.Shape
-    Set cellShape = slide.Shapes("CalendarTable").Table.cell(row, column).Shape
+    Set cellShape = slide.Shapes("CalendarGrid").Table.cell(row, column).Shape
 
     Dim entryName As String
     Dim entryShape As PowerPoint.Shape

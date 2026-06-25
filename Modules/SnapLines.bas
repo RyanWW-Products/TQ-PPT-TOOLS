@@ -15,12 +15,12 @@ Sub SnapLeadingLines(control As IRibbonControl)
     ' Set the current slide
     Set oSlide = ActiveWindow.Selection.SlideRange(1)
 
-    ' Check for BottomBar
-    If Not ShapeExists(oSlide, "BottomBar") Then
-        MsgBox "BottomBar not found on the slide."
+    ' Find the datebar (by tag / "Datebar*" name / legacy "BottomBar")
+    Set bottomBar = FindDateBar(oSlide)
+    If bottomBar Is Nothing Then
+        MsgBox "No datebar found on the slide."
         Exit Sub
     End If
-    Set bottomBar = oSlide.Shapes("BottomBar")
 
     ' Calculate the middle Y position of the BottomBar
     middleY = bottomBar.Top + (bottomBar.Height / 2)
@@ -69,12 +69,9 @@ Sub ArrangeEntriesInZOrder(oSlide As slide)
 End Sub
 
 Sub BringTimelineTablesToFront(oSlide As slide)
-    Dim shapeItem As Shape
-    For Each shapeItem In oSlide.Shapes
-        If shapeItem.Name = "TopBar" Or shapeItem.Name = "BottomBar" Then
-            shapeItem.ZOrder msoBringToFront
-        End If
-    Next shapeItem
+    Dim bar As Shape
+    Set bar = FindDateBar(oSlide)
+    If Not bar Is Nothing Then bar.ZOrder msoBringToFront
 End Sub
 
 Function ShapeExists(slide As slide, shapeName As String) As Boolean

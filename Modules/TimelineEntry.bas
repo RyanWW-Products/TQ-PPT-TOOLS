@@ -12,12 +12,34 @@ Sub EntryGenerator(control As IRibbonControl)
         Exit Sub
     End If
     Set oSlide = ActiveWindow.Selection.SlideRange(1)
-    ' Manual entry: no real date, so name it with a sequential counter (TimelineEntry 0001, 0002, ...)
-    Dim manualSuffix As String
-    manualSuffix = Format$(NextManualEntryNumber(oSlide), "0000")
-    ' lineX/lineTopY < 0 -> Make-Entry default (centered, 50pt stub above)
-    CreateTimelineEntry oSlide, "12/12/2099", "Lorem Ipsum", 100, 100, 2 * 72, _
-                        -1, -1, False, 1, dummy, CDate("12/12/2099"), "Days", manualSuffix
+
+    ' Ask for a date: Skip (placeholder) / Confirm (use date) / Confirm & Place (drop on timeline).
+    Dim frm As frmEntryDate, choice As String, d As Date, hasDate As Boolean
+    Set frm = New frmEntryDate
+    frm.Show
+    choice = frm.Result
+    hasDate = frm.HasDate
+    If hasDate Then d = frm.EnteredDate
+    Unload frm
+    If choice = "Cancel" Then Exit Sub
+
+    Dim grp As Shape, manualSuffix As String
+    If choice = "Skip" Or Not hasDate Then
+        ' placeholder entry: counter-named, no real date (the original behavior)
+        manualSuffix = Format$(NextManualEntryNumber(oSlide), "0000")
+        CreateTimelineEntry oSlide, "12/12/2099", "Lorem Ipsum", 100, 100, 2 * 72, _
+                            -1, -1, False, 1, dummy, CDate("12/12/2099"), "Days", manualSuffix
+        Exit Sub
+    End If
+
+    ' real date: date-encoded name + full date stashed so Date Snap stays year-accurate
+    Set grp = CreateTimelineEntry(oSlide, Format$(d, "mmm d"), "Lorem Ipsum", 100, 100, 2 * 72, _
+                                  -1, -1, False, 1, dummy, d, "Days", "")
+    On Error Resume Next
+    grp.Tags.Add "TLFullDate", CStr(CDbl(d))
+    On Error GoTo 0
+
+    If choice = "Place" Then PlaceEntryOnTimeline oSlide, grp, d
 End Sub
 
 ' Next sequential number for a manual entry on this slide ("TimelineEntry 0001", "0002", ...).

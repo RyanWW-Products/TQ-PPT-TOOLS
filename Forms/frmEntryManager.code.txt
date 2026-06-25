@@ -65,11 +65,24 @@ Private Sub UserForm_Initialize()
                       "Then  Mar: 3,7,14-16  (or paste M/D / M/D/YYYY dates)."
     mpgMain.Value = 0
 
-    Set s = FirstCalendarSlide()
+    ' default the grid to the CURRENT slide's month when it's a calendar slide, else the first
+    Set s = Nothing
+    On Error Resume Next
+    Set s = ActiveWindow.View.slide
+    On Error GoTo 0
+    If s Is Nothing Then
+        Set s = FirstCalendarSlide()
+    ElseIf Not IsCalendarSlide(s) Then
+        Set s = FirstCalendarSlide()
+    End If
     If Not s Is Nothing Then gridYear = CalYearOf(s): gridMonth = CalMonthOf(s)
     suppress = False
 
+    lblSwatch.BackStyle = fmBackStyleOpaque
+    lblSwatch.BorderStyle = fmBorderStyleSingle
+    cmdUpdateRow.Caption = "Update Label"
     UpdateSwatch
+    SyncColorPicker
     BuildGrid
     RefreshGrid
     RefreshEntries
@@ -123,6 +136,7 @@ End Sub
 Private Sub cboGroup_Change()
     If suppress Then Exit Sub
     UpdateSwatch
+    SyncColorPicker
     RefreshGrid
 End Sub
 
@@ -160,17 +174,40 @@ Private Sub cmdRenameGroup_Click()
     RefreshEntries
 End Sub
 
+' Recolor button and the Color dropdown both recolor the active group, so picking a
+' color applies immediately (works even if the Recolor button were misnamed).
 Private Sub cmdRecolor_Click()
+    ApplyColorToActiveGroup
+End Sub
+
+Private Sub cboColor_Change()
+    ApplyColorToActiveGroup
+End Sub
+
+Private Sub ApplyColorToActiveGroup()
     Dim nm As String
+    If suppress Then Exit Sub
     nm = ActiveGroup()
     If nm = "" Then Exit Sub
-    If cboColor.ListIndex < 0 Then MsgBox "Pick a color first.", vbExclamation: Exit Sub
+    If cboColor.ListIndex < 0 Then Exit Sub
     SetGroupColor reg, nm, PaletteColor(cboColor.ListIndex)
     RecolorGroupShapes reg, nm
     SaveRegistry reg
     UpdateSwatch
     DrawAllLegends reg
     RefreshGrid
+End Sub
+
+' Point the Color dropdown at the active group's current palette color (no recolor).
+Private Sub SyncColorPicker()
+    Dim c As Long, i As Long
+    suppress = True
+    c = GroupColor(reg, ActiveGroup())
+    cboColor.ListIndex = -1
+    For i = 0 To PALETTE_COUNT - 1
+        If PaletteColor(i) = c Then cboColor.ListIndex = i: Exit For
+    Next i
+    suppress = False
 End Sub
 
 Private Sub cmdDeleteGroup_Click()
@@ -194,33 +231,7 @@ Private Sub cmdDeleteGroup_Click()
     RefreshEntries
 End Sub
 
-Private Sub cmdMoveUp_Click()
-    MoveGroup -1
-End Sub
-Private Sub cmdMoveDown_Click()
-    MoveGroup 1
-End Sub
-Private Sub MoveGroup(ByVal delta As Integer)
-    Dim nm As String, names As Variant, idx As Long, i As Long, j As Long, oi As Long, oj As Long
-    nm = ActiveGroup()
-    If nm = "" Then Exit Sub
-    names = GroupNamesInOrder(reg)
-    idx = -1
-    For i = LBound(names) To UBound(names)
-        If StrComp(names(i), nm, vbTextCompare) = 0 Then idx = i: Exit For
-    Next i
-    j = idx + delta
-    If idx < 0 Or j < LBound(names) Or j > UBound(names) Then Exit Sub
-    oi = GroupOrder(reg, CStr(names(idx)))
-    oj = GroupOrder(reg, CStr(names(j)))
-    SetGroupOrder reg, CStr(names(idx)), oj
-    SetGroupOrder reg, CStr(names(j)), oi
-    SaveRegistry reg
-    DrawAllLegends reg
-    PopulateGroupList
-    SelectGroup nm
-    UpdateSwatch
-End Sub
+' (Group reordering / Move Up-Down removed.)
 
 ' ---------------------------------------------------------------- legend controls
 Private Sub chkLegend_Click()
@@ -523,37 +534,137 @@ Private Function SingleSelectedIndex() As Long
     If cnt = 1 Then SingleSelectedIndex = found Else SingleSelectedIndex = -1
 End Function
 
+' When exactly one row is selected, mirror its values into the editors. Wrapped in suppress
+' so setting cboRowGroup/chkShowDesc here doesn't fire their live-apply handlers.
 Private Sub lstEntries_Change()
     Dim sel As Long, it As Variant
+    If suppress Then Exit Sub
     sel = SingleSelectedIndex()
     If sel < 0 Then Exit Sub
+    suppress = True
     it = entArr(sel + 1)
     txtRowLabel.text = it(5)
     SelectInCombo cboRowGroup, CStr(it(4))
+    chkShowDesc.Value = (CStr(it(7)) = "1")
+    suppress = False
 End Sub
 
+' Update button: applies the LABEL text to every selected entry (group + show-description
+' apply live via their own handlers below).
 Private Sub cmdUpdateRow_Click()
-    Dim sel As Long, it As Variant, sld As slide, shp As Shape, ng As String
-    sel = SingleSelectedIndex()
-    If sel < 0 Then MsgBox "Select exactly one entry to update.", vbExclamation: Exit Sub
-    it = entArr(sel + 1)
-    Set sld = ActivePresentation.Slides(CLng(it(0)))
-    On Error Resume Next
-    Set shp = sld.Shapes(CStr(it(6)))
-    On Error GoTo 0
-    If shp Is Nothing Then
-        MsgBox "That entry couldn't be found (it may have changed). Refreshing.", vbExclamation
-        RefreshEntries
-        Exit Sub
-    End If
-    SetEntryLabelText shp, txtRowLabel.text
-    If cboRowGroup.ListIndex >= 0 Then
-        ng = cboRowGroup.Value
-        If StrComp(ng, CStr(it(4)), vbTextCompare) <> 0 Then SetEntryGroupOf shp, ng, reg
-    End If
-    DrawLegend sld, reg
+    Dim i As Long, it As Variant, sld As slide, shp As Shape, anyHit As Boolean, keys As Object
+    Set keys = CaptureSelection()
+    For i = 0 To lstEntries.ListCount - 1
+        If lstEntries.Selected(i) Then
+            it = entArr(i + 1)
+            Set sld = ActivePresentation.Slides(CLng(it(0)))
+            Set shp = Nothing
+            On Error Resume Next
+            Set shp = sld.Shapes(CStr(it(6)))
+            On Error GoTo 0
+            If Not shp Is Nothing Then SetEntryLabelText shp, txtRowLabel.text: anyHit = True
+        End If
+    Next i
+    If Not anyHit Then MsgBox "Select one or more entries first.", vbExclamation: Exit Sub
+    suppress = True
+    On Error GoTo Cleanup
     RefreshEntries
+    RestoreSelectionRaw keys
+Cleanup:
+    suppress = False
+End Sub
+
+' Live: changing the Group dropdown reassigns ALL selected entries immediately.
+Private Sub cboRowGroup_Change()
+    If suppress Then Exit Sub
+    ApplyGroupToSelected
+End Sub
+
+Private Sub ApplyGroupToSelected()
+    Dim ng As String, i As Long, it As Variant, sld As slide, shp As Shape
+    Dim affected As Object, sk As Variant, anyHit As Boolean, keys As Object
+    If cboRowGroup.ListIndex < 0 Then Exit Sub
+    ng = cboRowGroup.Value
+    Set keys = CaptureSelection()
+    Set affected = CreateObject("Scripting.Dictionary")
+    For i = 0 To lstEntries.ListCount - 1
+        If lstEntries.Selected(i) Then
+            it = entArr(i + 1)
+            Set sld = ActivePresentation.Slides(CLng(it(0)))
+            Set shp = Nothing
+            On Error Resume Next
+            Set shp = sld.Shapes(CStr(it(6)))
+            On Error GoTo 0
+            If Not shp Is Nothing Then
+                SetEntryGroupOf shp, ng, reg
+                affected(it(0)) = True
+                anyHit = True
+            End If
+        End If
+    Next i
+    If Not anyHit Then Exit Sub
+    For Each sk In affected.Keys
+        DrawLegend ActivePresentation.Slides(CLng(sk)), reg
+    Next sk
+    suppress = True
+    On Error GoTo Cleanup
     RefreshGrid
+    RefreshEntries
+    RestoreSelectionRaw keys
+Cleanup:
+    suppress = False
+End Sub
+
+' Live: toggling Show description applies to ALL selected entries immediately.
+Private Sub chkShowDesc_Click()
+    If suppress Then Exit Sub
+    ApplyShowDescToSelected
+End Sub
+
+Private Sub ApplyShowDescToSelected()
+    Dim show As Boolean, i As Long, it As Variant, sld As slide, shp As Shape, anyHit As Boolean, keys As Object
+    show = (chkShowDesc.Value = True)
+    Set keys = CaptureSelection()
+    For i = 0 To lstEntries.ListCount - 1
+        If lstEntries.Selected(i) Then
+            it = entArr(i + 1)
+            Set sld = ActivePresentation.Slides(CLng(it(0)))
+            Set shp = Nothing
+            On Error Resume Next
+            Set shp = sld.Shapes(CStr(it(6)))
+            On Error GoTo 0
+            If Not shp Is Nothing Then SetEntryShowDesc shp, show: anyHit = True
+        End If
+    Next i
+    If Not anyHit Then Exit Sub
+    suppress = True
+    On Error GoTo Cleanup
+    RefreshEntries
+    RestoreSelectionRaw keys
+Cleanup:
+    suppress = False
+End Sub
+
+' Remember which entries are selected (by slide + shape name) so a refresh can restore them.
+Private Function CaptureSelection() As Object
+    Dim d As Object, i As Long, it As Variant
+    Set d = CreateObject("Scripting.Dictionary")
+    For i = 0 To lstEntries.ListCount - 1
+        If lstEntries.Selected(i) Then
+            it = entArr(i + 1)
+            d(CStr(it(0)) & "|" & CStr(it(6))) = True
+        End If
+    Next i
+    Set CaptureSelection = d
+End Function
+
+Private Sub RestoreSelectionRaw(keys As Object)
+    Dim i As Long, it As Variant
+    If keys Is Nothing Then Exit Sub
+    For i = 0 To lstEntries.ListCount - 1
+        it = entArr(i + 1)
+        If keys.Exists(CStr(it(0)) & "|" & CStr(it(6))) Then lstEntries.Selected(i) = True
+    Next i
 End Sub
 
 Private Sub cmdDeleteSel_Click()

@@ -578,6 +578,7 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
         Set sh = sld.Shapes.AddShape(msoShapeRectangle, colLArr(ci), BAND_TOP, colWArr(ci), BAND_HEIGHT)
         StyleBandCell sh, GetSegmentLabel(t, pageCols(ci)), sc, isGreen
         sh.Name = SHAPE_PREFIX & "_BandCell_" & ci & "_" & sld.SlideIndex
+        sh.Tags.Add "TLCellDate", CStr(CDbl(pageCols(ci)))   ' precise date per cell (for Date Snap)
         cellNames(ci) = sh.Name
     Next ci
 
@@ -596,7 +597,8 @@ Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Lo
     Else
         Set grp = sld.Shapes.Range(cellNames).Group
     End If
-    grp.Name = "BottomBar"
+    grp.Name = NextDateBarName(sld)
+    grp.Tags.Add "TLBar", "1"                        ' durable marker so lookups don't depend on the name
     grp.Tags.Add "TLType", t                        ' stamp the unit on the bar (shape tag -> survives copy/paste)
     With grp.Shadow                                 ' #1 drop shadow on the whole band
         .Visible = msoTrue
@@ -869,7 +871,7 @@ End Function
 Private Sub ClearPriorOutput(ByVal sld As slide)
     Dim i As Long
     For i = sld.Shapes.count To 1 Step -1
-        If (sld.Shapes(i).Tags("TLENTRY") = "1") Or (sld.Shapes(i).Name = "BottomBar") _
+        If (sld.Shapes(i).Tags("TLENTRY") = "1") Or IsDateBar(sld.Shapes(i)) _
            Or (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Then sld.Shapes(i).Delete
     Next i
     Dim s As Long
@@ -1243,6 +1245,166 @@ Private Sub SetTag(ByVal sld As slide, ByVal tagKey As String, ByVal tagVal As S
 End Sub
 
 ' ============================================================================
+' DATEBAR LOOKUP / UNIT RECOGNITION  (shared by both makers + the edit tools)
+' ============================================================================
+' The bar is a grouped object named "Datebar NNN", tagged TLBar="1" and TLType=<unit>.
+' Everything finds it by tag / name pattern (not the old literal "BottomBar"), so a
+' rename or regroup no longer breaks recognition. Legacy "BottomBar"/"TopBar" still match.
+Public Function IsDateBar(ByVal shp As Shape) As Boolean
+    If ShapeTagVal(shp, "TLBar") = "1" Then IsDateBar = True: Exit Function
+    If shp.Name Like "Datebar*" Then IsDateBar = True: Exit Function
+    If shp.Name = "BottomBar" Or shp.Name = "TopBar" Then IsDateBar = True
+End Function
+
+Public Function FindDateBar(ByVal sld As slide) As Shape
+    Dim shp As Shape
+    For Each shp In sld.Shapes
+        If ShapeTagVal(shp, "TLBar") = "1" Then Set FindDateBar = shp: Exit Function
+    Next shp
+    For Each shp In sld.Shapes
+        If shp.Name Like "Datebar*" Then Set FindDateBar = shp: Exit Function
+    Next shp
+    For Each shp In sld.Shapes
+        If shp.Name = "BottomBar" Then Set FindDateBar = shp: Exit Function
+    Next shp
+    For Each shp In sld.Shapes
+        If shp.Name = "TopBar" Then Set FindDateBar = shp: Exit Function
+    Next shp
+End Function
+
+Public Function NextDateBarName(ByVal sld As slide) As String
+    Dim shp As Shape, mx As Long, suff As String, n As Long
+    For Each shp In sld.Shapes
+        If Left$(shp.Name, 8) = "Datebar " Then
+            suff = Mid$(shp.Name, 9)
+            If IsNumeric(suff) Then
+                n = CLng(suff)
+                If n > mx Then mx = n
+            End If
+        End If
+    Next shp
+    NextDateBarName = "Datebar " & Format$(mx + 1, "000")
+End Function
+
+Private Function ShapeTagVal(ByVal shp As Shape, ByVal key As String) As String
+    On Error Resume Next
+    ShapeTagVal = shp.Tags(key)
+    On Error GoTo 0
+End Function
+
+' Robust unit: the bar's TLType tag -> stored slide state -> inferred from the bar labels.
+Public Function BarUnit(ByVal sld As slide, ByVal bar As Shape) As String
+    Dim t As String
+    Dim ev() As TLEvent, n As Long, color As String
+    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean, tlSlide As slide
+    If Not bar Is Nothing Then t = ShapeTagVal(bar, "TLType")
+    If t <> "" Then BarUnit = t: Exit Function
+    Set tlSlide = FindTimelineSlide()
+    If Not tlSlide Is Nothing Then
+        If LoadTimelineState(tlSlide, ev, n, t, color, gaps, multi, wipe, weighted) Then
+            If t <> "" Then BarUnit = t: Exit Function
+        End If
+    End If
+    If Not bar Is Nothing Then t = InferBarUnit(bar)
+    BarUnit = t
+End Function
+
+' Read the bar's cell labels and guess the unit. Two-bar aware: a bottom row of bare
+' day numbers -> Days, bare month names -> Months, checked before the coarser top signals.
+Public Function InferBarUnit(ByVal bar As Shape) As String
+    Dim labels As Collection, i As Long, s As String, anyText As Boolean
+    Dim hasTime As Boolean, hasFullDate As Boolean, hasMonYear As Boolean
+    Dim hasBareDay As Boolean, hasMonName As Boolean, allYears As Boolean
+    Set labels = New Collection
+    CollectBarLabels bar, labels
+    allYears = True
+    For i = 1 To labels.count
+        s = Trim$(CStr(labels(i)))
+        If s <> "" Then
+            anyText = True
+            If LabelIsTime(s) Then hasTime = True
+            If LabelIsFullDate(s) Then hasFullDate = True
+            If LabelIsMonthYear(s) Then hasMonYear = True
+            If LabelIsBareDay(s) Then hasBareDay = True
+            If LabelIsMonthName(s) Then hasMonName = True
+            If Not LabelIsYear(s) Then allYears = False
+        End If
+    Next i
+    If Not anyText Then Exit Function
+    If hasTime Then InferBarUnit = "Hours": Exit Function
+    If hasFullDate Then InferBarUnit = "Days": Exit Function
+    If hasBareDay Then InferBarUnit = "Days": Exit Function
+    If hasMonName Then InferBarUnit = "Months": Exit Function
+    If hasMonYear Then InferBarUnit = "Months": Exit Function
+    If allYears Then InferBarUnit = "Years"
+End Function
+
+Private Sub CollectBarLabels(ByVal shp As Shape, ByRef labels As Collection)
+    Dim it As Shape, s As String
+    If shp Is Nothing Then Exit Sub
+    If shp.Type = msoGroup Then
+        For Each it In shp.GroupItems
+            CollectBarLabels it, labels
+        Next it
+    Else
+        s = ""
+        On Error Resume Next
+        s = shp.TextFrame.TextRange.text
+        On Error GoTo 0
+        If Trim$(s) <> "" Then labels.Add s
+    End If
+End Sub
+
+Private Function LabelIsTime(ByVal s As String) As Boolean
+    s = UCase$(s)
+    LabelIsTime = (InStr(s, ":") > 0) And (InStr(s, "AM") > 0 Or InStr(s, "PM") > 0)
+End Function
+
+Private Function LabelIsYear(ByVal s As String) As Boolean
+    Dim y As Long
+    s = Trim$(s)
+    If Len(s) <> 4 Then Exit Function
+    If Not IsNumeric(s) Then Exit Function
+    y = CLng(s)
+    LabelIsYear = (y >= 1000 And y <= 2999)
+End Function
+
+Private Function LabelIsBareDay(ByVal s As String) As Boolean
+    Dim d As Long
+    s = Trim$(s)
+    If Len(s) < 1 Or Len(s) > 2 Then Exit Function
+    If Not IsNumeric(s) Then Exit Function
+    d = CLng(s)
+    LabelIsBareDay = (d >= 1 And d <= 31)
+End Function
+
+Private Function LabelIsFullDate(ByVal s As String) As Boolean
+    LabelIsFullDate = (InStr(s, "/") > 0) And IsDate(s)
+End Function
+
+Private Function LabelIsMonthYear(ByVal s As String) As Boolean
+    Dim p() As String
+    s = Trim$(s)
+    If InStr(s, "/") > 0 Then Exit Function
+    p = Split(s, " ")
+    If UBound(p) <> 1 Then Exit Function
+    LabelIsMonthYear = IsMonthWordTL(p(0)) And LabelIsYear(p(1))
+End Function
+
+Private Function LabelIsMonthName(ByVal s As String) As Boolean
+    LabelIsMonthName = IsMonthWordTL(Trim$(s))
+End Function
+
+Private Function IsMonthWordTL(ByVal tok As String) As Boolean
+    Select Case LCase$(Trim$(tok))
+        Case "jan", "january", "feb", "february", "mar", "march", "apr", "april", _
+             "may", "jun", "june", "jul", "july", "aug", "august", "sep", "sept", _
+             "september", "oct", "october", "nov", "november", "dec", "december"
+            IsMonthWordTL = True
+    End Select
+End Function
+
+' ============================================================================
 ' COPILOT PROMPT  -  convert any source timeline into the import format
 ' ============================================================================
 ' The single source of truth for the prompt (used by the ribbon button and the
@@ -1476,62 +1638,77 @@ End Sub
 ' the datebar. Re-reads the CURRENT datebar cell positions (the bar may have been
 ' moved/resized) and the CURRENT entries (some may be new/moved). Needs a timeline
 ' made by Make Timeline (which stores the date unit).
-Public Sub DateSnap(control As IRibbonControl)
+' Two modes. Group Move shifts the whole entry so its leader lands on the date. Line Nudge
+' moves only the leader WITHIN the entry's box bounds; entries whose date is past the box edge
+' are clamped + reported, with an offer to group-move those the rest of the way.
+Public Sub DateSnapGroupMove(control As IRibbonControl)
+    DateSnapCore True
+End Sub
+
+Public Sub DateSnapLineNudge(control As IRibbonControl)
+    DateSnapCore False
+End Sub
+
+Private Sub DateSnapCore(ByVal groupMove As Boolean)
+    Dim title As String
+    title = IIf(groupMove, "Date Snap (Group Move)", "Date Snap (Line Nudge)")
     On Error GoTo Fail
     Dim sld As slide
     Set sld = ActiveTargetSlide()
     If sld Is Nothing Then
-        MsgBox "Open a presentation and select a slide first.", vbExclamation, "Date Snap"
+        MsgBox "Open a presentation and select a slide first.", vbExclamation, title
         Exit Sub
     End If
 
-    ' Unit type: prefer the BottomBar's own tag (a SHAPE tag -> survives copy/paste to another
-    ' slide or deck); fall back to the stored timeline state for older bars that lack the tag.
-    Dim ev() As TLEvent, n As Long, t As String, color As String
-    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
-    Dim tlSlide As slide
-    t = ""
-    On Error Resume Next
-    t = sld.Shapes("BottomBar").Tags("TLType")
-    On Error GoTo 0
-    If t = "" Then
-        Set tlSlide = FindTimelineSlide()
-        If Not tlSlide Is Nothing Then LoadTimelineState tlSlide, ev, n, t, color, gaps, multi, wipe, weighted
-    End If
-    If t = "" Then
-        MsgBox "Couldn't determine the timeline's date unit. Run this on a slide that has a Make Timeline " & _
-               "datebar (the bar carries the unit), or keep the timeline's stored data.", vbExclamation, "Date Snap"
-        Exit Sub
-    End If
+    ' Robust unit: bar tag -> stored state -> inferred from the bar -> ask the user.
+    Dim bar As Shape, t As String
+    Set bar = FindDateBar(sld)
+    t = BarUnit(sld, bar)
+    If t = "" Then t = AskTimelineUnit()
+    If t = "" Then Exit Sub
 
     ' map each datebar cell's label -> its CURRENT left/width (absolute) so a moved/resized bar still snaps
     Dim cellLefts As Object, cellWidths As Object
     Set cellLefts = CreateObject("Scripting.Dictionary")
     Set cellWidths = CreateObject("Scripting.Dictionary")
-    CollectBandCells sld.Shapes, cellLefts, cellWidths
+    CollectBandCells bar, cellLefts, cellWidths
     If cellLefts.count = 0 Then
-        MsgBox "No datebar cells found on this slide (looked for the 'BottomBar' band cells).", vbExclamation, "Date Snap"
+        MsgBox "No datebar cells found on this slide (couldn't find a 'Datebar' / 'BottomBar').", vbExclamation, title
         Exit Sub
     End If
 
     Dim shp As Shape, snapped As Long, missed As Long, d As Date, lab As String
     Dim innerL As Single, innerW As Single, targetX As Single, ln As Shape
-    snapped = 0: missed = 0
+    Dim topY As Single, leftX As Single, botY As Single, rgtX As Single, cx As Single, frac As Double
+    Dim shortLabels As Collection, shortShapes As Collection, shortTargets As Collection
+    Set shortLabels = New Collection: Set shortShapes = New Collection: Set shortTargets = New Collection
+
     For Each shp In sld.Shapes
         If IsEntryGroup(shp) Then
             If TryEntryDate(shp, d) Then
-                lab = Trim$(GetSegmentLabel(t, UnitStartOf(d, t)))
-                If cellLefts.Exists(lab) Then
+                If MatchBarCell(d, t, cellLefts, lab, frac) Then
                     innerL = cellLefts(lab) + COL_PAD
                     innerW = cellWidths(lab) - 2 * COL_PAD
-                    If innerW < 0 Then innerW = 0           ' sub-16pt cell: pin to the padded-left edge
-                    targetX = innerL + UnitFracOf(d, t) * innerW
+                    If innerW < 0 Then innerW = 0
+                    targetX = innerL + frac * innerW
                     Set ln = LeadingLineOf(shp)
-                    If Not ln Is Nothing Then
-                        shp.Left = shp.Left + (targetX - ln.Left)    ' horizontal only
+                    If ln Is Nothing Then
+                        missed = missed + 1
+                    ElseIf groupMove Then
+                        shp.Left = shp.Left + (targetX - ln.Left)
                         snapped = snapped + 1
                     Else
-                        missed = missed + 1
+                        BoxRectOf shp, topY, leftX, botY, rgtX     ' Line Nudge: clamp to the box bounds
+                        cx = targetX
+                        If cx < leftX Then cx = leftX
+                        If cx > rgtX Then cx = rgtX
+                        ln.Left = cx
+                        snapped = snapped + 1
+                        If cx <> targetX Then
+                            shortLabels.Add Format$(d, "mmm d, yyyy")
+                            shortShapes.Add shp
+                            shortTargets.Add targetX
+                        End If
                     End If
                 Else
                     missed = missed + 1
@@ -1543,12 +1720,142 @@ Public Sub DateSnap(control As IRibbonControl)
     Next shp
 
     Dim msg As String
-    msg = snapped & " entr" & IIf(snapped = 1, "y", "ies") & " snapped to the datebar."
+    msg = snapped & " entr" & IIf(snapped = 1, "y", "ies") & " " & IIf(groupMove, "snapped", "nudged") & " to the datebar."
     If missed > 0 Then msg = msg & vbCrLf & missed & " skipped (couldn't read the date, or its unit isn't on the bar)."
-    MsgBox msg, vbInformation, "Date Snap"
+
+    If (Not groupMove) And shortLabels.count > 0 Then
+        Dim listMsg As String, k As Long, resp As VbMsgBoxResult, gm As Long
+        For k = 1 To shortLabels.count
+            listMsg = listMsg & vbCrLf & "  - " & shortLabels(k)
+        Next k
+        resp = MsgBox(shortLabels.count & " entr" & IIf(shortLabels.count = 1, "y", "ies") & _
+              " couldn't fully reach the date (the line hit the edge of the entry box):" & vbCrLf & listMsg & _
+              vbCrLf & vbCrLf & "Group-move those entries the rest of the way?", _
+              vbYesNo + vbQuestion, title)
+        If resp = vbYes Then
+            For k = 1 To shortShapes.count
+                Set shp = shortShapes(k)
+                Set ln = LeadingLineOf(shp)
+                If Not ln Is Nothing Then
+                    BoxRectOf shp, topY, leftX, botY, rgtX
+                    ln.Left = (leftX + rgtX) / 2                 ' recenter the leader...
+                    shp.Left = shp.Left + (shortTargets(k) - ln.Left)   ' ...then group-move to the date
+                    gm = gm + 1
+                End If
+            Next k
+            msg = msg & vbCrLf & gm & " group-moved to finish."
+        End If
+    End If
+
+    MsgBox msg, vbInformation, title
     Exit Sub
 Fail:
-    MsgBox "Date Snap failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Date Snap"
+    MsgBox title & " failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, title
+End Sub
+
+' Last-resort unit prompt when the bar + stored data can't tell us.
+Private Function AskTimelineUnit() As String
+    Dim s As String
+    s = InputBox("Couldn't auto-detect the timeline's date unit." & vbCrLf & _
+                 "Enter one of: Years, Months, Days, Hours", "Date Snap")
+    Select Case LCase$(Trim$(s))
+        Case "years": AskTimelineUnit = "Years"
+        Case "months": AskTimelineUnit = "Months"
+        Case "days": AskTimelineUnit = "Days"
+        Case "hours": AskTimelineUnit = "Hours"
+    End Select
+End Function
+
+' Match an entry's date to a datebar cell. Tries the unit's own cell first, then progressively
+' coarser cells - so a two-bar bar (whose fine row has ambiguous bare labels like "15"/"Jan")
+' snaps against the unique coarser cell ("Mar 2023" / "2023") using the fraction within it.
+Private Function MatchBarCell(ByVal d As Date, ByVal t As String, ByVal cellLefts As Object, _
+                              ByRef matchedLabel As String, ByRef frac As Double) As Boolean
+    Dim chain As Variant, i As Long, u As String, lab As String, dk As String
+    ' Precise: a cell tagged with this exact date (the finest unit) - exact for single + two-bar.
+    dk = DateKeyOf(UnitStartOf(d, t))
+    If cellLefts.Exists(dk) Then
+        matchedLabel = dk
+        frac = UnitFracOf(d, t)
+        MatchBarCell = True
+        Exit Function
+    End If
+    ' Fallback (hand-built bars with no date tags): match by label, coarsest unique cell.
+    chain = CoarserChain(t)
+    For i = LBound(chain) To UBound(chain)
+        u = CStr(chain(i))
+        lab = Trim$(GetSegmentLabel(u, UnitStartOf(d, u)))
+        If cellLefts.Exists(lab) Then
+            matchedLabel = lab
+            frac = UnitFracOf(d, u)
+            MatchBarCell = True
+            Exit Function
+        End If
+    Next i
+End Function
+
+Private Function CoarserChain(ByVal t As String) As Variant
+    Select Case t
+        Case "Hours": CoarserChain = Array("Hours", "Days")
+        Case "Days": CoarserChain = Array("Days", "Months")
+        Case "Months": CoarserChain = Array("Months", "Years")
+        Case Else: CoarserChain = Array("Years")
+    End Select
+End Function
+
+' Canonical key for a cell's date (used to match entries to date-tagged cells precisely).
+Private Function DateKeyOf(ByVal d As Date) As String
+    DateKeyOf = "D:" & Format$(d, "yyyy-mm-dd-hh")
+End Function
+
+' ============================================================================
+' PLACE ENTRY ON TIMELINE  (Make Entry -> "Confirm & Place")
+' ============================================================================
+' Drop a freshly-made entry under the datebar at its date, then re-space ALL dated entries
+' evenly across the bar (date order) and line-nudge each leader to its date.
+Public Sub PlaceEntryOnTimeline(ByVal sld As slide, ByVal newEntry As Shape, ByVal d As Date)
+    Const ROW_TOP As Single = 82.8           ' 1.15" from the top, just under the band
+    Dim bar As Shape, t As String, db As Shape
+    On Error GoTo Fail
+    Set bar = FindDateBar(sld)
+    t = BarUnit(sld, bar)
+    If bar Is Nothing Or t = "" Then
+        MsgBox "Entry created, but no datebar was found on this slide to place it on.", _
+               vbInformation, "Make Entry"
+        Exit Sub
+    End If
+    Set db = FindTaggedDescendant(newEntry, "Date Box")
+    If Not db Is Nothing Then newEntry.Top = newEntry.Top + (ROW_TOP - db.Top)
+    ReflowTimeline sld, bar, t
+    Exit Sub
+Fail:
+    MsgBox "The entry was created but couldn't be auto-placed:" & vbCrLf & vbCrLf & Err.Description, _
+           vbExclamation, "Make Entry"
+End Sub
+
+' Re-space by date: GROUP-MOVE every dated entry so its leader sits exactly on its date.
+' Horizontal only - each entry keeps its vertical position (lanes preserved). A group move
+' (not a line nudge) is what lets the leader actually reach the date.
+Private Sub ReflowTimeline(ByVal sld As slide, ByVal bar As Shape, ByVal t As String)
+    Dim cellLefts As Object, cellWidths As Object, shp As Shape, dd As Date
+    Dim lab As String, frac As Double, innerL As Single, innerW As Single, targetX As Single, ln As Shape
+    Set cellLefts = CreateObject("Scripting.Dictionary")
+    Set cellWidths = CreateObject("Scripting.Dictionary")
+    CollectBandCells bar, cellLefts, cellWidths
+    For Each shp In sld.Shapes
+        If IsEntryGroup(shp) Then
+            If TryEntryDate(shp, dd) Then
+                If MatchBarCell(dd, t, cellLefts, lab, frac) Then
+                    innerL = cellLefts(lab) + COL_PAD
+                    innerW = cellWidths(lab) - 2 * COL_PAD
+                    If innerW < 0 Then innerW = 0
+                    targetX = innerL + frac * innerW
+                    Set ln = LeadingLineOf(shp)
+                    If Not ln Is Nothing Then shp.Left = shp.Left + (targetX - ln.Left)
+                End If
+            End If
+        End If
+    Next shp
 End Sub
 
 ' --- shared helpers for the entry-edit commands -----------------------------
@@ -1570,22 +1877,35 @@ Private Function LeadingLineOf(ByVal entryGroup As Shape) As Shape
 End Function
 
 ' Recurse a container, recording each datebar cell by its label -> current Left/Width (absolute).
-Private Sub CollectBandCells(ByVal shapesColl As Object, ByVal cellLefts As Object, ByVal cellWidths As Object)
-    Dim shp As Shape, lab As String
-    For Each shp In shapesColl
-        If shp.Type = msoGroup Then
-            CollectBandCells shp.GroupItems, cellLefts, cellWidths
-        ElseIf shp.Name Like SHAPE_PREFIX & "_BandCell_*" Then
-            lab = ""
-            On Error Resume Next
-            lab = Trim$(shp.TextFrame.TextRange.text)
-            On Error GoTo 0
-            If lab <> "" Then
-                cellLefts(lab) = shp.Left
-                cellWidths(lab) = shp.Width
+' Map each datebar cell's label -> current Left/Width (absolute) by walking the bar group's
+' leaf cells. Works for both rectangle-cell bars (Timeline maker) and converted-table textbox
+' bars (DateBar maker); recurses nested groups (e.g. a two-bar group).
+Private Sub CollectBandCells(ByVal bar As Shape, ByVal cellLefts As Object, ByVal cellWidths As Object)
+    Dim it As Shape, lab As String, cd As String, dk As String
+    If bar Is Nothing Then Exit Sub
+    If bar.Type = msoGroup Then
+        For Each it In bar.GroupItems
+            CollectBandCells it, cellLefts, cellWidths
+        Next it
+    Else
+        lab = ""
+        On Error Resume Next
+        lab = Trim$(bar.TextFrame.TextRange.text)
+        On Error GoTo 0
+        If lab <> "" Then
+            cellLefts(lab) = bar.Left
+            cellWidths(lab) = bar.Width
+        End If
+        ' also key by the cell's tagged date (precise, disambiguates two-bar bare labels)
+        cd = ShapeTagVal(bar, "TLCellDate")
+        If cd <> "" Then
+            If IsNumeric(cd) Then
+                dk = DateKeyOf(CDate(CDbl(cd)))
+                cellLefts(dk) = bar.Left
+                cellWidths(dk) = bar.Width
             End If
         End If
-    Next shp
+    End If
 End Sub
 
 ' Read + parse an entry's date from its "Date Box" text (strips an appended time).
@@ -1657,11 +1977,9 @@ Public Sub PlaceEntryAtTop(control As IRibbonControl)
 
     ' the datebar to snap leaders to (may have been moved -> use its current position)
     Dim bar As Shape
-    On Error Resume Next
-    Set bar = sld.Shapes("BottomBar")
-    On Error GoTo Fail
+    Set bar = FindDateBar(sld)
     If bar Is Nothing Then
-        MsgBox "No datebar (BottomBar) found on this slide to snap leaders to.", vbExclamation, "Place Entry at Top"
+        MsgBox "No datebar found on this slide to snap leaders to.", vbExclamation, "Place Entry at Top"
         Exit Sub
     End If
     Dim middleY As Single

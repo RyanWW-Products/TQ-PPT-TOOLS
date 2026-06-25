@@ -1,6 +1,10 @@
 Attribute VB_Name = "MakeTimeline"
 Option Explicit
 
+' Fixed datebar band height (matches the Timeline maker's BAND_HEIGHT) so every datebar
+' group has the same vertical size regardless of column count / font scaling.
+Public Const BAR_HEIGHT As Single = 30
+
 Sub CreateTimeline(control As IRibbonControl)
     Dim timelineType As String
     Dim timelineColor As String
@@ -198,15 +202,13 @@ Sub CreateTimelineTable(SlideIndex As Integer, timelineType As String, startDate
     Dim colCount As Integer
     Dim i As Integer
     Dim slideWidth As Single, tableWidth As Single
-    Dim segmentDate As Date
-    
+    Dim segmentDate As Date, cellDates() As Date
+
     Set pptSlide = ActivePresentation.Slides(SlideIndex)
 slideWidth = pptSlide.parent.PageSetup.slideWidth
 colCount = GetSegmentCount(timelineType, startDate, endDate)
+ReDim cellDates(1 To colCount)
 Set pptTable = pptSlide.Shapes.AddTable(1, colCount).Table
-
-' Naming the table
-pptTable.parent.Name = "BottomBar"
 
 tableWidth = slideWidth
 segmentDate = startDate
@@ -214,13 +216,55 @@ For i = 1 To colCount
     pptTable.cell(1, i).Shape.TextFrame.TextRange.text = GetSegmentLabel(timelineType, segmentDate)
     pptTable.Columns(i).Width = tableWidth / colCount
     FormatCell pptTable.cell(1, i), timelineColor, False, colCount ' Corrected call to FormatCell
+    cellDates(i) = segmentDate
     segmentDate = DateAdd(GetIntervalType(timelineType), 1, segmentDate)
 Next i
     pptTable.parent.Left = (slideWidth - tableWidth) / 2
     pptTable.parent.Top = pptSlide.parent.PageSetup.slideHeight / 3
 
     FormatTableBorders pptTable, RGB(0, 0, 0)
+    FinalizeDateBar pptSlide, Array(pptTable.parent), timelineType, Array(cellDates)
 End Sub
+
+' Convert the bar table(s) to objects (fixed BAR_HEIGHT), group them into one "Datebar NNN",
+' and stamp the unit so Date Snap etc. recognize it. tables = array of table shapes.
+Private Function FinalizeDateBar(ByVal sld As slide, ByVal tables As Variant, ByVal unitType As String, Optional ByVal tablesDates As Variant) As Shape
+    Dim ti As Long, coll As Collection, s As Variant, tShape As Shape
+    Dim names As Collection, arr() As String, i As Long, grp As Shape, hasDates As Boolean
+    hasDates = Not IsMissing(tablesDates)
+    Set names = New Collection
+    For ti = LBound(tables) To UBound(tables)
+        Set tShape = tables(ti)
+        If hasDates Then
+            Set coll = ConvertTableToTextBoxes(tShape, BAR_HEIGHT, tablesDates(ti))
+        Else
+            Set coll = ConvertTableToTextBoxes(tShape, BAR_HEIGHT)
+        End If
+        For Each s In coll
+            names.Add s.Name
+        Next s
+    Next ti
+    If names.count = 0 Then Exit Function
+    ReDim arr(1 To names.count)
+    For i = 1 To names.count
+        arr(i) = names(i)
+    Next i
+    If names.count = 1 Then
+        Set grp = sld.Shapes(arr(1))
+    Else
+        Set grp = sld.Shapes.Range(arr).Group
+    End If
+    grp.Name = NextDateBarName(sld)
+    grp.Tags.Add "TLBar", "1"
+    grp.Tags.Add "TLType", unitType
+    With grp.Shadow
+        .Visible = msoTrue
+        .Type = msoShadow21
+        .IncrementOffsetX 3
+        .IncrementOffsetY 3
+    End With
+    Set FinalizeDateBar = grp
+End Function
 Function GetIntervalType(timelineType As String) As String
     Select Case timelineType
         Case "Hours": GetIntervalType = "h"
@@ -321,6 +365,7 @@ Sub CreateTwoBarTimelineTable(SlideIndex As Integer, startDate As Date, endDate 
     Dim segmentStartDate As Date, segmentEndDate As Date
     Dim totalDays As Integer, daysInSegment As Integer
     Dim topColorString As String, bottomColorString As String
+    Dim topDates() As Date, bottomDates() As Date
 
     Set pptSlide = ActivePresentation.Slides(SlideIndex)
     slideWidth = pptSlide.parent.PageSetup.slideWidth
@@ -335,6 +380,8 @@ Sub CreateTwoBarTimelineTable(SlideIndex As Integer, startDate As Date, endDate 
         topBarCount = DateDiff("m", startDate, endDate) + 1
         bottomBarCount = totalDays
     End If
+    ReDim topDates(1 To topBarCount)
+    ReDim bottomDates(1 To bottomBarCount)
 
     ' Assigning color strings based on the timelineColor
     topColorString = IIf(timelineColor = "Green", "Green", "Gray")
@@ -357,6 +404,7 @@ If timelineType = "Days" Then
 
         ' Set the text for each cell
         pptTableTop.cell(1, i).Shape.TextFrame.TextRange.text = Format(segmentStartDate, "mmm yyyy")
+        topDates(i) = DateSerial(year(segmentStartDate), month(segmentStartDate), 1)
 
         ' Calculate the width for each segment
         Dim segmentDays As Integer
@@ -376,6 +424,7 @@ End If
         currentYear = year(startDate)
         For i = 1 To topBarCount
             pptTableTop.cell(1, i).Shape.TextFrame.TextRange.text = CStr(currentYear)
+            topDates(i) = DateSerial(currentYear, 1, 1)
             monthsInYear = IIf(currentYear = year(endDate), month(endDate), 12) - IIf(currentYear = year(startDate), month(startDate) - 1, 0)
             pptTableTop.Columns(i).Width = (monthsInYear / totalMonths) * slideWidth
             currentYear = currentYear + 1
@@ -392,8 +441,10 @@ End If
     For i = 1 To bottomBarCount
         If timelineType = "Months" Then
             pptTableBottom.cell(1, i).Shape.TextFrame.TextRange.text = Format(DateAdd("m", i - 1, startDate), "mmm")
+            bottomDates(i) = DateAdd("m", i - 1, startDate)
         ElseIf timelineType = "Days" Then
             pptTableBottom.cell(1, i).Shape.TextFrame.TextRange.text = Format(segmentStartDate, "d")
+            bottomDates(i) = segmentStartDate
             segmentStartDate = DateAdd("d", 1, segmentStartDate)
         End If
         pptTableBottom.Columns(i).Width = slideWidth / bottomBarCount
@@ -401,11 +452,14 @@ End If
     Next i
     pptTableBottom.parent.Name = "BottomBar"
     pptTableBottom.parent.Left = 0
-    pptTableBottom.parent.Top = pptTableTop.parent.Top + pptTableTop.Rows(1).Height
+    pptTableTop.Rows(1).Height = BAR_HEIGHT          ' fixed height so the two rows align + stay consistent
+    pptTableBottom.Rows(1).Height = BAR_HEIGHT
+    pptTableBottom.parent.Top = pptTableTop.parent.Top + BAR_HEIGHT
 
     ' Formatting table borders
     FormatTableBorders pptTableTop, RGB(0, 0, 0)
     FormatTableBorders pptTableBottom, RGB(0, 0, 0)
+    FinalizeDateBar pptSlide, Array(pptTableTop.parent, pptTableBottom.parent), timelineType, Array(topDates, bottomDates)
 End Sub
 
 Function DarkenColor(col As Long, ByVal darkenPercent As Single) As Long

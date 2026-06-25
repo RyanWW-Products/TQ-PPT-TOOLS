@@ -137,7 +137,7 @@ Public Sub RepositionDayEntries(sld As slide, ByVal dy As Long, reg As Object)
     startDay = Weekday(DateSerial(yr, mo, 1), vbSunday)
     row = ((dy + startDay - 2) \ 7) + 1
     col = ((dy + startDay - 2) Mod 7) + 1
-    Set cellShape = sld.Shapes("CalendarTable").Table.Cell(row, col).Shape
+    Set cellShape = sld.Shapes("CalendarGrid").Table.Cell(row, col).Shape
 
     Set ents = New Collection
     For suf = Asc("A") To Asc("D")
@@ -203,21 +203,34 @@ Public Function AddEntryForGroup(sld As slide, ByVal yr As Long, ByVal mo As Lon
     startDay = Weekday(DateSerial(yr, mo, 1), vbSunday)
     row = ((dy + startDay - 2) \ 7) + 1
     col = ((dy + startDay - 2) Mod 7) + 1
-    Set cellShape = sld.Shapes("CalendarTable").Table.Cell(row, col).Shape
+    Set cellShape = sld.Shapes("CalendarGrid").Table.Cell(row, col).Shape
     Set newEntry = sld.Shapes.AddShape(msoShapeRectangle, cellShape.Left, cellShape.Top, _
                                        cellShape.Width, cellShape.Height)
     newEntry.name = "Entry_" & dy & "_" & suffix
     newEntry.Tags.Add "EntryGroup", groupName
     newEntry.Tags.Add "EntryDay", CStr(dy)
+    newEntry.Tags.Add "EntryDesc", label
+    newEntry.Tags.Add "ShowDesc", "0"           ' descriptions hidden by default
     With newEntry.TextFrame.TextRange
-        .text = label
         .Font.name = "Arial"
         .Font.Size = 10
         .Font.color.RGB = RGB(0, 0, 0)
     End With
+    ApplyEntryText newEntry                      ' shows the description only if ShowDesc = 1
+    newEntry.ZOrder msoSendToBack                ' sit behind the calendar grid
     RepositionDayEntries sld, dy, reg
     AddEntryForGroup = True
 End Function
+
+' Render an entry's visible text: its description if ShowDesc=1, else blank.
+Public Sub ApplyEntryText(shp As Shape)
+    Dim show As Boolean, desc As String
+    show = (GetShapeTag(shp, "ShowDesc") = "1")
+    desc = GetShapeTag(shp, "EntryDesc")
+    On Error Resume Next
+    shp.TextFrame.TextRange.text = IIf(show, desc, "")
+    On Error GoTo 0
+End Sub
 
 ' Rename surviving same-day entries to contiguous A,B,C... (two-pass, collision-free)
 ' then reflow - REQUIRED after any delete because the layout maps A..D contiguously.
@@ -287,9 +300,10 @@ End Sub
 ' ---- scan existing entries -------------------------------------------------
 ' Returns a Collection of Array(slideIndex, year, month, day, group, label, shapeName),
 ' migrating untagged legacy entries into DEFAULT_GROUP on touch.
+' Returns Array(slideIndex, year, month, day, group, description, shapeName, showDesc("0"/"1")).
 Public Function ScanEntries(reg As Object) As Collection
     Dim col As Collection, sld As slide, shp As Shape
-    Dim yr As Long, mo As Long, g As String, lbl As String
+    Dim yr As Long, mo As Long, g As String, desc As String, sd As String
     Set col = New Collection
     For Each sld In ActivePresentation.Slides
         If IsCalendarSlide(sld) Then
@@ -301,12 +315,20 @@ Public Function ScanEntries(reg As Object) As Collection
                         g = DEFAULT_GROUP
                         shp.Tags.Add "EntryGroup", g
                     End If
-                    lbl = ""
-                    On Error Resume Next
-                    lbl = shp.TextFrame.TextRange.text
-                    On Error GoTo 0
-                    lbl = Replace(Replace(lbl, vbCr, " "), vbLf, " ")
-                    col.Add Array(sld.SlideIndex, yr, mo, DayOfEntry(shp), g, lbl, shp.name)
+                    desc = GetShapeTag(shp, "EntryDesc")
+                    sd = GetShapeTag(shp, "ShowDesc")
+                    If desc = "" And sd = "" Then
+                        ' legacy entry: adopt its current text as the description, keep it shown
+                        On Error Resume Next
+                        desc = shp.TextFrame.TextRange.text
+                        On Error GoTo 0
+                        desc = Replace(Replace(desc, vbCr, " "), vbLf, " ")
+                        shp.Tags.Add "EntryDesc", desc
+                        shp.Tags.Add "ShowDesc", "1"
+                        sd = "1"
+                    End If
+                    If sd = "" Then sd = "0"
+                    col.Add Array(sld.SlideIndex, yr, mo, DayOfEntry(shp), g, desc, shp.name, sd)
                 End If
             Next shp
         End If
@@ -343,10 +365,22 @@ Public Function DayHasGroup(sld As slide, ByVal dy As Long, ByVal groupName As S
 End Function
 
 ' ---- single-entry edits (All Entries tab) ----------------------------------
+' Set an entry's description (stored on the shape; shown only if ShowDesc=1).
 Public Sub SetEntryLabelText(shp As Shape, ByVal txt As String)
     On Error Resume Next
-    shp.TextFrame.TextRange.text = txt
+    shp.Tags.Delete "EntryDesc"
     On Error GoTo 0
+    shp.Tags.Add "EntryDesc", txt
+    ApplyEntryText shp
+End Sub
+
+' Show or hide an entry's description text.
+Public Sub SetEntryShowDesc(shp As Shape, ByVal show As Boolean)
+    On Error Resume Next
+    shp.Tags.Delete "ShowDesc"
+    On Error GoTo 0
+    shp.Tags.Add "ShowDesc", IIf(show, "1", "0")
+    ApplyEntryText shp
 End Sub
 
 Public Sub SetEntryGroupOf(shp As Shape, ByVal newGroup As String, reg As Object)
@@ -463,7 +497,7 @@ Public Sub DrawLegend(sld As slide, reg As Object)
     If present.count = 0 Then Exit Sub
 
     On Error Resume Next
-    Set tbl = sld.Shapes("CalendarTable")
+    Set tbl = sld.Shapes("CalendarGrid")
     On Error GoTo 0
     If tbl Is Nothing Then Exit Sub
 

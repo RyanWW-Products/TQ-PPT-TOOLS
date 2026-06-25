@@ -1,0 +1,63 @@
+' ============================================================================
+' frmEntryDate - the Make Entry date prompt (Skip / Confirm / Confirm & Place).
+' ============================================================================
+' BUILD: Insert > UserForm, rename it  frmEntryDate , lay out the controls below, then
+' paste EVERYTHING from "Option Explicit" down into the form's code window.
+'
+' CONTROLS (exact names):
+'   lblPrompt        Label      (instructions; caption set in code)
+'   txtDate          TextBox    (the date the user types)
+'   cmdSkip          CommandButton  caption "Skip Date"
+'   cmdConfirm       CommandButton  caption "Confirm"
+'   cmdConfirmPlace  CommandButton  caption "Confirm && Place"   (&& shows one &)
+'
+' EntryGenerator reads Result / HasDate / EnteredDate after .Show returns.
+' ============================================================================
+Option Explicit
+
+Public Result As String          ' "Skip" | "Confirm" | "Place" | "Cancel"
+Public HasDate As Boolean
+Public EnteredDate As Date
+
+Private Sub UserForm_Initialize()
+    Me.Caption = "Make Entry"
+    Result = "Cancel"
+    HasDate = False
+    lblPrompt.Caption = "Enter the entry date (e.g. 6/15/2024)." & vbCrLf & vbCrLf & _
+        "Skip Date - create a placeholder entry (no date)." & vbCrLf & _
+        "Confirm - create the entry with this date." & vbCrLf & _
+        "Confirm & Place - also drop it onto the timeline at its date."
+End Sub
+
+Private Sub cmdSkip_Click()
+    Result = "Skip"
+    HasDate = False
+    Me.Hide
+End Sub
+
+Private Sub cmdConfirm_Click()
+    If TryParse() Then Result = "Confirm": Me.Hide
+End Sub
+
+Private Sub cmdConfirmPlace_Click()
+    If TryParse() Then Result = "Place": Me.Hide
+End Sub
+
+Private Function TryParse() As Boolean
+    If Not IsDate(txtDate.text) Then
+        MsgBox "Please enter a valid date (e.g. 6/15/2024), or click Skip Date.", vbExclamation, "Make Entry"
+        Exit Function
+    End If
+    EnteredDate = CDate(txtDate.text)
+    HasDate = True
+    TryParse = True
+End Function
+
+Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
+    ' Closing with the X = Cancel; hide (not unload) so EntryGenerator can still read Result.
+    If CloseMode = vbFormControlMenu Then
+        Result = "Cancel"
+        Cancel = True
+        Me.Hide
+    End If
+End Sub
