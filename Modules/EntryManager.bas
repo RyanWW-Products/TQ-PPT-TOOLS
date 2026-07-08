@@ -32,11 +32,53 @@ Public Function GetSlideTag(sld As slide, ByVal name As String) As String
 End Function
 
 Public Function CalYearOf(sld As slide) As Long
-    CalYearOf = CLng(Val(GetSlideTag(sld, "CalendarYear")))
+    Dim yr As Long, mo As Long
+    If CalSlideDate(sld, yr, mo) Then CalYearOf = yr
 End Function
 
 Public Function CalMonthOf(sld As slide) As Long
-    CalMonthOf = CLng(Val(GetSlideTag(sld, "CalendarMonth")))
+    Dim yr As Long, mo As Long
+    If CalSlideDate(sld, yr, mo) Then CalMonthOf = mo
+End Function
+
+' Resolve a calendar slide's month/year from the most durable source available, so a slide
+' that was COPIED/duplicated (which loses slide-level Tags) is still recognized:
+'   1) slide Tags (fastest, present on freshly-made slides)
+'   2) the CalendarGrid shape's Tags (shape tags survive copy/paste)
+'   3) the MonthTitle text (e.g. "June 2024")
+Private Function CalSlideDate(ByVal sld As slide, ByRef yr As Long, ByRef mo As Long) As Boolean
+    Dim shp As Shape, s As String, d As Date
+    ' 1) slide tags
+    yr = CLng(Val(GetSlideTag(sld, "CalendarYear")))
+    mo = CLng(Val(GetSlideTag(sld, "CalendarMonth")))
+    If yr > 0 And mo >= 1 And mo <= 12 Then CalSlideDate = True: Exit Function
+    ' 2) CalendarGrid shape tags
+    On Error Resume Next
+    Set shp = sld.Shapes("CalendarGrid")
+    On Error GoTo 0
+    If Not shp Is Nothing Then
+        yr = CLng(Val(GetShapeTag(shp, "CalendarYear")))
+        mo = CLng(Val(GetShapeTag(shp, "CalendarMonth")))
+        If yr > 0 And mo >= 1 And mo <= 12 Then CalSlideDate = True: Exit Function
+    End If
+    ' 3) MonthTitle text ("Month YYYY")
+    Set shp = Nothing
+    On Error Resume Next
+    Set shp = sld.Shapes("MonthTitle")
+    On Error GoTo 0
+    If Not shp Is Nothing Then
+        s = ""
+        On Error Resume Next
+        s = Trim$(shp.TextFrame.TextRange.text)
+        On Error GoTo 0
+        If s <> "" Then
+            If IsDate(s) Then
+                d = CDate(s)
+                yr = Year(d): mo = Month(d)
+                CalSlideDate = True: Exit Function
+            End If
+        End If
+    End If
 End Function
 
 Public Function IsCalendarSlide(sld As slide) As Boolean

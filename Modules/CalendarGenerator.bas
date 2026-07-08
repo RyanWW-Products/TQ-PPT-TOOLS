@@ -147,6 +147,12 @@ Private Sub CreateCalendarSlide(pres As PowerPoint.presentation, tpl As PowerPoi
 
     AddCustomProperty slide, "CalendarMonth", CStr(month(monthDate))
     AddCustomProperty slide, "CalendarYear", CStr(year(monthDate))
+    ' also stamp the grid SHAPE (shape tags survive copy/paste; slide tags do not) so a
+    ' calendar copied to another slide is still recognized by the Entry Manager.
+    On Error Resume Next
+    grid.Tags.Add "CalendarMonth", CStr(month(monthDate))
+    grid.Tags.Add "CalendarYear", CStr(year(monthDate))
+    On Error GoTo 0
 End Sub
 
 ' Set the seven weekday labels in the "Weekbar" group, Sunday-first.

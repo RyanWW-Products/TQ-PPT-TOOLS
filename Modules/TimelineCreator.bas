@@ -58,6 +58,7 @@ Private Type TLEvent
     UnitStart As Date        ' the date truncated to the chosen unit (column key)
     UnitFrac  As Double       ' position within the unit, 0..1 (leader-line X)
     Bates     As String       ' Bates / document number, parsed + held (not yet rendered)
+    Prec      As Integer      ' precision of the parsed date: 1=Years 2=Months 3=Days 4=Hours
 End Type
 
 Private Function NAVY() As Long
@@ -225,7 +226,12 @@ Private Function ReadEvents(ByVal filePath As String, ByRef events() As TLEvent,
         Else
             If colTime > 0 Then
                 rawTime = ws.Cells(r, colTime).Value
-                If Len(Trim$(CStr(rawTime & ""))) > 0 Then ev.DateLabel = ev.DateLabel & "  " & FormatTime(rawTime)
+                If Len(Trim$(CStr(rawTime & ""))) > 0 Then
+                    ev.DateLabel = ev.DateLabel & "  " & FormatTime(rawTime)
+                    ev.RawDate = Int(CDbl(ev.RawDate)) + TimeFractionOf(rawTime)   ' fold the clock time into the value
+                    ev.SortKey = CDbl(ev.RawDate)
+                    ev.Prec = 4                                                    ' has a time -> hour precision
+                End If
             End If
             ev.Desc = desc
             If colBates > 0 Then ev.Bates = Trim$(CStr(ws.Cells(r, colBates).Value & "")) Else ev.Bates = vbNullString
@@ -262,6 +268,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
         d = CDate(v)
         ev.RawDate = d
         ev.DateLabel = Format$(d, "mmm d")
+        ev.Prec = 3
         GoTo Finish
     End If
 
@@ -274,6 +281,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
             d = DateSerial(yr, 1, 1)
             ev.RawDate = d
             ev.DateLabel = CStr(yr)
+            ev.Prec = 1
             GoTo Finish
         End If
     End If
@@ -288,6 +296,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
                 d = DateSerial(yr, mo, 1)
                 ev.RawDate = d
                 ev.DateLabel = Format$(d, "mmmm yyyy")
+                ev.Prec = 2
                 GoTo Finish
             End If
         End If
@@ -297,6 +306,7 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
         d = CDate(s)
         ev.RawDate = d
         ev.DateLabel = Format$(d, "mmm d")
+        ev.Prec = 3
         GoTo Finish
     End If
     Exit Function
@@ -329,6 +339,18 @@ Private Function FormatTime(ByVal v As Variant) As String
     End If
 End Function
 
+' The clock time as a 0..1 fraction of a day (drops any whole-day part).
+Private Function TimeFractionOf(ByVal v As Variant) As Double
+    Dim d As Date
+    On Error Resume Next
+    If IsNumeric(v) Then
+        TimeFractionOf = CDbl(v) - Int(CDbl(v))
+    ElseIf IsDate(v) Then
+        d = CDate(v)
+        TimeFractionOf = CDbl(d) - Int(CDbl(d))
+    End If
+End Function
+
 Private Sub SortEvents(ByRef ev() As TLEvent, ByVal n As Long)
     Dim i As Long, j As Long, t As TLEvent
     For i = 1 To n - 1
@@ -354,25 +376,35 @@ Private Function UnitWord(ByVal t As String) As String
 End Function
 
 ' Guess the most likely unit from the data's granularity.
+' Guess the unit from the data's PRECISION (the finest level the dates actually carry),
+' choosing the finest unit that has >=2 distinct values - never finer than the data's precision.
+' (So Dec 2000 - Jan 2001 full dates -> Days, not Years just because it crosses a year boundary.)
 Private Function DetectType(ByRef ev() As TLEvent, ByVal n As Long) As String
-    Dim yrs As Object, mos As Object, dys As Object, i As Long
+    Dim yrs As Object, mos As Object, dys As Object, hrs As Object, i As Long, finest As Integer
     Set yrs = CreateObject("Scripting.Dictionary")
     Set mos = CreateObject("Scripting.Dictionary")
     Set dys = CreateObject("Scripting.Dictionary")
+    Set hrs = CreateObject("Scripting.Dictionary")
+    finest = 0
     For i = 1 To n
         yrs(Year(ev(i).RawDate)) = 1
         mos(Year(ev(i).RawDate) * 100 + Month(ev(i).RawDate)) = 1
         dys(CLng(Int(CDbl(ev(i).RawDate)))) = 1
+        hrs(CLng(Int(CDbl(ev(i).RawDate))) * 24 + Hour(ev(i).RawDate)) = 1
+        If ev(i).Prec > finest Then finest = ev(i).Prec
     Next i
-    If yrs.count >= 2 Then
-        DetectType = "Years"
-    ElseIf mos.count >= 2 Then
-        DetectType = "Months"
-    ElseIf dys.count >= 2 Then
-        DetectType = "Days"
-    Else
-        DetectType = "Hours"
-    End If
+    ' finest precision present, stepping coarser only if that level has <2 distinct values
+    If finest >= 4 And hrs.count >= 2 Then DetectType = "Hours": Exit Function
+    If finest >= 3 And dys.count >= 2 Then DetectType = "Days": Exit Function
+    If finest >= 2 And mos.count >= 2 Then DetectType = "Months": Exit Function
+    If yrs.count >= 2 Then DetectType = "Years": Exit Function
+    ' a single distinct value at every level -> fall back to the data's own precision
+    Select Case finest
+        Case 4: DetectType = "Hours"
+        Case 3: DetectType = "Days"
+        Case 2: DetectType = "Months"
+        Case Else: DetectType = "Years"
+    End Select
 End Function
 
 Private Function IntervalCode(ByVal t As String) As String
@@ -467,20 +499,39 @@ Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, 
         If colsPerSlide > nCols Then colsPerSlide = nCols
     End If
 
-    Dim pageCount As Long, drawn As Long, overflowMsg As String, p As Long, startCol As Long
+    Dim pageCount As Long, drawn As Long, overflowMsg As String, p As Long
     pageCount = -Int(-nCols / colsPerSlide)
     Dim sld As slide
     Set sld = firstSlide
 
+    Dim availH As Single
+    availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
+
+    ' Pass 1: ONE font scale for the whole timeline (the most-crowded slide sets it), so the
+    ' date-box and entry-box text is the same size on every slide.
+    Dim pageCols() As Date, pn As Long, pMaxH As Single, globalMaxH As Single
+    Dim cwTmp() As Single, clTmp() As Single, lnTmp() As Long
+    globalMaxH = 0
     For p = 1 To pageCount
-        startCol = (p - 1) * colsPerSlide
-        Dim pn As Long, k As Long
-        pn = CLng(MinS(colsPerSlide, nCols - startCol))
-        Dim pageCols() As Date
-        ReDim pageCols(1 To pn)
-        For k = 1 To pn: pageCols(k) = cols(startCol + k): Next k
+        PageColumns p, colsPerSlide, nCols, cols, pageCols, pn
+        ComputePageLayout pn, pageCols, ev, n, sw, availH, allowWeighted, cwTmp, clTmp, lnTmp, pMaxH
+        If pMaxH > globalMaxH Then globalMaxH = pMaxH
+    Next p
+    Dim globalSc As Single
+    globalSc = 1
+    If globalMaxH > availH And globalMaxH > 0 Then globalSc = availH / globalMaxH
+    If globalSc < MIN_SCALE Then
+        globalSc = MIN_SCALE
+        overflowMsg = vbCrLf & "NOTE: content exceeds one slide even at minimum size on some columns." & _
+                      vbCrLf & "Consider multi-slide split, gaps, or trimming descriptions."
+    End If
+    If globalSc > 1 Then globalSc = 1
+
+    ' Pass 2: draw every slide at that single scale.
+    For p = 1 To pageCount
+        PageColumns p, colsPerSlide, nCols, cols, pageCols, pn
         If p > 1 Then Set sld = NewPageSlide(firstSlide)
-        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, allowWeighted, overflowMsg)
+        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, allowWeighted, overflowMsg, globalSc)
     Next p
 
     DrawTimeline = "Events drawn: " & drawn & " of " & n & vbCrLf & _
@@ -491,13 +542,55 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
                           ByRef pageCols() As Date, ByVal pn As Long, ByVal t As String, _
                           ByVal barColor As String, ByVal sw As Single, ByVal sh As Single, _
                           ByVal doWipe As Boolean, ByVal allowWeighted As Boolean, _
-                          ByRef overflowMsg As String) As Long
-    Dim availH As Single
+                          ByRef overflowMsg As String, ByVal forcedSc As Single) As Long
+    Dim availH As Single, ci As Long
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
-    ' event count per column (drives weighting)
-    Dim ci As Long, i As Long
-    Dim cnt() As Long
+    Dim colWArr() As Single, colLArr() As Single, lanes() As Long, maxH As Single
+    ComputePageLayout pn, pageCols, ev, n, sw, availH, allowWeighted, colWArr, colLArr, lanes, maxH
+
+    ' Use the timeline-wide scale (forcedSc) so text matches across slides; fall back to a
+    ' per-page scale only if no global one was supplied.
+    Dim sc As Single
+    sc = forcedSc
+    If sc <= 0 Then
+        sc = 1
+        If maxH > availH And maxH > 0 Then sc = availH / maxH
+        If sc < MIN_SCALE Then sc = MIN_SCALE
+        If sc > 1 Then sc = 1
+    End If
+
+    Dim bandBottom As Single
+    bandBottom = BAND_TOP + BAND_HEIGHT          ' band is fixed height; only the entries below scale
+
+    DrawBar sld, pageCols, pn, colWArr, colLArr, sc, t, barColor
+
+    Dim drawn As Long, animSeq As Long
+    For ci = 1 To pn
+        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq, lanes(ci), t)
+    Next ci
+
+    DrawPage = drawn
+End Function
+
+' The columns (unit dates) for page p.
+Private Sub PageColumns(ByVal p As Long, ByVal colsPerSlide As Long, ByVal nCols As Long, _
+                        ByRef cols() As Date, ByRef pageCols() As Date, ByRef pn As Long)
+    Dim startCol As Long, k As Long
+    startCol = (p - 1) * colsPerSlide
+    pn = CLng(MinS(colsPerSlide, nCols - startCol))
+    ReDim pageCols(1 To pn)
+    For k = 1 To pn: pageCols(k) = cols(startCol + k): Next k
+End Sub
+
+' Per-page layout: event counts -> column widths/lefts -> lanes + the page's effective max
+' content height (drives the autofit scale). Shared by the scale pass and the draw pass so
+' both see identical geometry.
+Private Sub ComputePageLayout(ByVal pn As Long, ByRef pageCols() As Date, ByRef ev() As TLEvent, _
+        ByVal n As Long, ByVal sw As Single, ByVal availH As Single, ByVal allowWeighted As Boolean, _
+        ByRef colWArr() As Single, ByRef colLArr() As Single, ByRef lanes() As Long, ByRef maxH As Single)
+    Dim ci As Long, i As Long, cnt() As Long, frac() As Single, acc As Single
+    Dim singleH As Single, effH As Single, lc As Long
     ReDim cnt(1 To pn)
     For ci = 1 To pn
         For i = 1 To n
@@ -505,9 +598,6 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
         Next i
     Next ci
 
-    ' per-column width (fraction of slide width): uniform, or tiered-by-count when weighted.
-    ' Build cumulative left edges so every downstream X is a lookup, not (ci-1)*colW.
-    Dim frac() As Single, colWArr() As Single, colLArr() As Single, acc As Single
     ReDim colWArr(1 To pn): ReDim colLArr(1 To pn)
     If allowWeighted Then
         ColumnWeights cnt, pn, frac
@@ -522,10 +612,6 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
         acc = acc + colWArr(ci)
     Next ci
 
-    ' per-column lanes + effective height for vertical autofit. A column that would
-    ' overflow at full size AND is wide enough for more than one box-lane gets packed
-    ' into lanes (column-major by date), shrinking its effective height toward the bar.
-    Dim lanes() As Long, maxH As Single, singleH As Single, effH As Single, lc As Long
     ReDim lanes(1 To pn)
     maxH = 0
     For ci = 1 To pn
@@ -543,29 +629,7 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
         End If
         If effH > maxH Then maxH = effH
     Next ci
-
-    Dim sc As Single
-    sc = 1
-    If maxH > availH And maxH > 0 Then sc = availH / maxH
-    If sc < MIN_SCALE Then
-        sc = MIN_SCALE
-        overflowMsg = vbCrLf & "NOTE: content exceeds one slide even at minimum size on some columns." & _
-                      vbCrLf & "Consider multi-slide split, gaps, or trimming descriptions."
-    End If
-    If sc > 1 Then sc = 1
-
-    Dim bandBottom As Single
-    bandBottom = BAND_TOP + BAND_HEIGHT          ' band is fixed height; only the entries below scale
-
-    DrawBar sld, pageCols, pn, colWArr, colLArr, sc, t, barColor
-
-    Dim drawn As Long, animSeq As Long
-    For ci = 1 To pn
-        drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq, lanes(ci), t)
-    Next ci
-
-    DrawPage = drawn
-End Function
+End Sub
 
 ' The DateBar-style band: gradient cell per column, grouped + named "BottomBar".
 Private Sub DrawBar(ByVal sld As slide, ByRef pageCols() As Date, ByVal pn As Long, _
@@ -1413,16 +1477,20 @@ End Function
 Private Function CopilotPromptText() As String
     Dim s As String, nl As String
     nl = vbCrLf
-    s = "Convert the attached timeline into a fixed spreadsheet format. Extract EVERY dated event and output ONE table with exactly these four columns and this header row:" & nl & nl
+    s = "Convert the attached timeline into a spreadsheet I can import. Provide the result as a DOWNLOADABLE CSV or Excel (.xlsx) FILE (not just a pasted table) with exactly these four columns and this header row:" & nl & nl
     s = s & "Date | Time | Description | Bates" & nl & nl
-    s = s & "Rules:" & nl
+    s = s & "MOST IMPORTANT - keep all text EXACTLY as written:" & nl
+    s = s & "- Reproduce every Description VERBATIM - word-for-word and character-for-character, exactly as it appears in the source." & nl
+    s = s & "- Do NOT summarize, paraphrase, shorten, reword, rephrase, or ""clean up"" anything." & nl
+    s = s & "- Do NOT fix or change spelling, grammar, punctuation, capitalization, abbreviations, or typos - even obvious ones. Leave them exactly as they are." & nl
+    s = s & "- The ONLY change ever allowed to a Description is joining a multi-line entry onto one line with a single space." & nl & nl
+    s = s & "Other rules:" & nl
     s = s & "- One row per distinct event, sorted oldest to newest." & nl
-    s = s & "- Date: use the most precise the source supports - a full date as M/D/YYYY (e.g. 3/15/2020); only a month and year as ""Month YYYY"" (e.g. April 2023); only a year as the 4-digit year (e.g. 2024). Never leave Date blank; omit events that have no date at all." & nl
+    s = s & "- Date: put the event's date into the chart's format - a full date as M/D/YYYY (e.g. 3/15/2020); a month and year as ""Month YYYY"" (e.g. April 2023); a year alone as the 4-digit year (e.g. 2024). Never leave Date blank; omit events that have no date at all. (Reformatting the date into this format is required and is NOT the same as editing the description text.)" & nl
     s = s & "- Time: only if a clock time is given (e.g. 2:30 PM); otherwise leave blank." & nl
-    s = s & "- Description: a concise one-line summary of the event in plain text, with no line breaks or bullet characters." & nl
-    s = s & "- Bates: the Bates number / document number / control number associated with the event if one is present (e.g. ABC-000123, or a range ABC-000123-000130); otherwise leave blank. Copy it exactly - do not alter or invent it." & nl
+    s = s & "- Bates: the Bates number / document number / control number for the event if one is present (e.g. ABC-000123, or a range ABC-000123-000130); otherwise leave blank. Copy it exactly - never alter or invent it." & nl
     s = s & "- For a date range, use the start date (one row)." & nl
-    s = s & "- Do not invent events, dates, or Bates numbers. Output ONLY the table - no commentary and no extra columns."
+    s = s & "- Do not invent, add, or drop events. No commentary and no extra columns - just the file with those four columns."
     CopilotPromptText = s
 End Function
 
@@ -1814,8 +1882,7 @@ End Function
 ' Drop a freshly-made entry under the datebar at its date, then re-space ALL dated entries
 ' evenly across the bar (date order) and line-nudge each leader to its date.
 Public Sub PlaceEntryOnTimeline(ByVal sld As slide, ByVal newEntry As Shape, ByVal d As Date)
-    Const ROW_TOP As Single = 82.8           ' 1.15" from the top, just under the band
-    Dim bar As Shape, t As String, db As Shape
+    Dim bar As Shape, t As String, db As Shape, rowTop As Single
     On Error GoTo Fail
     Set bar = FindDateBar(sld)
     t = BarUnit(sld, bar)
@@ -1824,8 +1891,9 @@ Public Sub PlaceEntryOnTimeline(ByVal sld As slide, ByVal newEntry As Shape, ByV
                vbInformation, "Make Entry"
         Exit Sub
     End If
+    rowTop = bar.Top + bar.Height + BAND_GAP        ' same gap below the bar as Make Timeline uses
     Set db = FindTaggedDescendant(newEntry, "Date Box")
-    If Not db Is Nothing Then newEntry.Top = newEntry.Top + (ROW_TOP - db.Top)
+    If Not db Is Nothing Then newEntry.Top = newEntry.Top + (rowTop - db.Top)
     ReflowTimeline sld, bar, t
     Exit Sub
 Fail:

@@ -14,7 +14,7 @@
 ; ============================================================================
 
 #define MyAppName    "Trial Quest PowerPoint Add-in"
-#define MyAppVersion "5.4.6"
+#define MyAppVersion "5.6.2"
 #define MyPublisher  "Trial Quest"
 #define MyAddinFile  "TrialQuest.ppam"
 #define GhOwner      "RyanWW-Products"

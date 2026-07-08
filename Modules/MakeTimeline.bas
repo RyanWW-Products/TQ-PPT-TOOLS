@@ -4,6 +4,9 @@ Option Explicit
 ' Fixed datebar band height (matches the Timeline maker's BAND_HEIGHT) so every datebar
 ' group has the same vertical size regardless of column count / font scaling.
 Public Const BAR_HEIGHT As Single = 30
+' 0.62" from the top of the slide - matches the Timeline maker's BAND_TOP so a DateBar lands
+' in the same spot as a Make-Timeline bar.
+Public Const BAR_TOP As Single = 44.64
 
 Sub CreateTimeline(control As IRibbonControl)
     Dim timelineType As String
@@ -16,7 +19,9 @@ Sub CreateTimeline(control As IRibbonControl)
     ' Create and show the UserForm
     Dim frm As TimelineSettings
     Set frm = New TimelineSettings
+    Load frm                              ' run Initialize, then default THIS (DateBar) dialog to grey
     frm.Caption = "DateBar Settings"      ' renamed at runtime (no form re-import needed)
+    frm.optGreen.Value = False            ' DateBar defaults to the grey gradient (green not pre-selected)
     frm.Show
 
     If frm.Tag = "OK" Then
@@ -242,6 +247,17 @@ Private Function FinalizeDateBar(ByVal sld As slide, ByVal tables As Variant, By
         End If
         For Each s In coll
             names.Add s.Name
+            On Error Resume Next
+            With s.TextFrame2.TextRange.Font.Shadow      ' drop shadow on the label text (like Make Timeline)
+                .Visible = msoTrue
+                .Style = msoShadowStyleOuterShadow
+                .Blur = 3
+                .Transparency = 0.5
+                .Size = 100
+                .OffsetX = 1.5
+                .OffsetY = 1.5
+            End With
+            On Error GoTo 0
         Next s
     Next ti
     If names.count = 0 Then Exit Function
@@ -263,6 +279,8 @@ Private Function FinalizeDateBar(ByVal sld As slide, ByVal tables As Variant, By
         .IncrementOffsetX 3
         .IncrementOffsetY 3
     End With
+    grp.Left = 0                 ' position like the Timeline maker's bar (full width, BAR_TOP)
+    grp.Top = BAR_TOP
     Set FinalizeDateBar = grp
 End Function
 Function GetIntervalType(timelineType As String) As String
@@ -297,7 +315,7 @@ End Function
             Case "Green"
                 topColor = RGB(0, 176, 80)
                 bottomColor = RGB(0, 70, 32)
-            Case "Gray"
+            Case "Gray", "Grey"
                 topColor = RGB(166, 166, 166)
                 bottomColor = RGB(38, 38, 38)
             ' Add more cases as needed
