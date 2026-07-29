@@ -1,0 +1,351 @@
+' ============================================================================
+' frmTitleManager - code-behind for the Timeline Title Manager.
+' ============================================================================
+' HOW TO USE: in the VBE, Insert > UserForm, rename it to  frmTitleManager .
+' Lay out the controls per the list below, then open the form's code window and
+' paste EVERYTHING below this header. The form calls the TitleManager +
+' TitleColors standard modules.
+'
+' CONTROLS EXPECTED (exact names):
+'   Top strip:
+'     cboPalette (ComboBox, Style = 2-fmStyleDropDownList)
+'     chkUnique  (CheckBox, Caption "Single-use titles get their own colors")
+'   Two side-by-side lists:
+'     lstTitles  (ListBox, MultiSelect = 1-fmMultiSelectMulti,
+'                 ColumnCount = 3, ColumnWidths = "150;28;95")   ' Title | count | color
+'     lstEntries (ListBox, ColumnCount = 2, ColumnWidths = "55;230")  ' Date | text  (read-only)
+'   Swatch row - TWELVE Label controls named exactly  swatch0 ... swatch11
+'                (small, e.g. 18x18; BorderStyle = 1-fmBorderStyleSingle). Their
+'                BackColor is painted from the palette in code; clicking one
+'                assigns that color to the selected title(s).
+'     lblSwatch  (Label, ~40 wide - shows the selected title's current color)
+'   Buttons:
+'     cmdCustom  (CommandButton, "Custom...")
+'     cmdAuto    (CommandButton, "Auto-Assign All")
+'     cmdRelease (CommandButton, "Release to Auto")
+'     cmdClear   (CommandButton, "Clear -> navy")
+'     cmdClose   (CommandButton, "Close")
+'
+' NOTE: a "title" is an entry whose FIRST line is bold (what Parse Content makes).
+' Assigning a color recolors that entry's DATE BOX across every timeline slide;
+' the date-box text auto-switches white/black so it stays readable.
+' ============================================================================
+Option Explicit
+
+Private reg As Object
+Private titleKeys() As String        ' 0-based, parallel to lstTitles rows
+Private keyCount As Long
+Private suppress As Boolean
+
+' ---------------------------------------------------------------- init
+Private Sub UserForm_Initialize()
+    Dim v As Variant, i As Long
+    Me.Caption = "Timeline Title Manager"
+    Set reg = TitleColors.LoadTitleReg()
+    TitleColors.EnsureTitleSettings reg
+
+    suppress = True
+    cboPalette.Clear
+    v = TitleColors.PaletteNamesList()
+    For i = LBound(v) To UBound(v)
+        cboPalette.AddItem CStr(v(i))
+    Next i
+    ' select by validated index (PaletteIndexOf always returns 0..3, even for a
+    ' corrupt/hand-edited stored name) so a DropDownList combo can't raise err 380
+    cboPalette.ListIndex = TitleColors.PaletteIndexOf(TitleColors.GetPalette(reg))
+    chkUnique.Value = TitleColors.GetSingletonUnique(reg)
+    PaintSwatches
+    RefreshTitles
+    suppress = False
+End Sub
+
+' ---------------------------------------------------------------- swatches
+Private Sub PaintSwatches()
+    Dim i As Long, c As Long, ctl As Object
+    For i = 0 To 11
+        On Error Resume Next
+        Set ctl = Me.Controls("swatch" & i)
+        On Error GoTo 0
+        If Not ctl Is Nothing Then
+            c = TitleColors.PaletteColorByName(cboPalette.Value, i)
+            ctl.BackColor = c
+            Set ctl = Nothing
+        End If
+    Next i
+End Sub
+
+Private Sub swatch0_Click()
+    AssignSwatch 0
+End Sub
+Private Sub swatch1_Click()
+    AssignSwatch 1
+End Sub
+Private Sub swatch2_Click()
+    AssignSwatch 2
+End Sub
+Private Sub swatch3_Click()
+    AssignSwatch 3
+End Sub
+Private Sub swatch4_Click()
+    AssignSwatch 4
+End Sub
+Private Sub swatch5_Click()
+    AssignSwatch 5
+End Sub
+Private Sub swatch6_Click()
+    AssignSwatch 6
+End Sub
+Private Sub swatch7_Click()
+    AssignSwatch 7
+End Sub
+Private Sub swatch8_Click()
+    AssignSwatch 8
+End Sub
+Private Sub swatch9_Click()
+    AssignSwatch 9
+End Sub
+Private Sub swatch10_Click()
+    AssignSwatch 10
+End Sub
+Private Sub swatch11_Click()
+    AssignSwatch 11
+End Sub
+
+Private Sub AssignSwatch(ByVal idx As Long)
+    AssignColorToSelected TitleColors.PaletteColorByName(cboPalette.Value, idx)
+End Sub
+
+' ---------------------------------------------------------------- list
+Private Sub RefreshTitles()
+    Dim keep As Object, i As Long
+    Set keep = SelectedKeySet()
+    Dim recs As Collection, rec As Variant, key As String, row As Long
+    Set recs = TitleManager.DistinctTitles()
+    suppress = True
+    lstTitles.Clear
+    keyCount = recs.count
+    If keyCount > 0 Then ReDim titleKeys(0 To keyCount - 1)
+    i = 0
+    For Each rec In recs
+        key = CStr(rec(0))
+        lstTitles.AddItem CStr(rec(1))                 ' col 0: title
+        row = lstTitles.ListCount - 1
+        lstTitles.List(row, 1) = CStr(rec(2))          ' col 1: count
+        lstTitles.List(row, 2) = ColorLabel(key)       ' col 2: color / state
+        titleKeys(i) = key
+        If keep.Exists(key) Then lstTitles.Selected(row) = True
+        i = i + 1
+    Next rec
+    suppress = False
+    UpdateSelectionUI
+End Sub
+
+Private Sub lstTitles_Change()
+    If suppress Then Exit Sub
+    UpdateSelectionUI
+End Sub
+
+Private Sub btnSelectAll_Click()
+    SetAllSelected True
+End Sub
+
+Private Sub btnDeselectAll_Click()
+    SetAllSelected False
+End Sub
+
+Private Sub SetAllSelected(ByVal sel As Boolean)
+    Dim i As Long
+    suppress = True
+    For i = 0 To lstTitles.ListCount - 1
+        lstTitles.Selected(i) = sel
+    Next i
+    suppress = False
+    UpdateSelectionUI
+End Sub
+
+' Show the first selected title's entries + color preview.
+Private Sub UpdateSelectionUI()
+    Dim key As String, ents As Collection, e As Variant, row As Long
+    lstEntries.Clear
+    key = FirstSelectedKey()
+    If key = "" Then
+        lblSwatch.BackColor = TitleColors.DefaultNavy()
+        Exit Sub
+    End If
+    lblSwatch.BackColor = TitleColors.GetTitleColor(reg, key)
+    Set ents = TitleManager.EntriesOfTitle(key)
+    For Each e In ents
+        lstEntries.AddItem CStr(e(1))                  ' col 0: date text
+        row = lstEntries.ListCount - 1
+        lstEntries.List(row, 1) = CStr(e(2))           ' col 1: body text
+    Next e
+End Sub
+
+' ---------------------------------------------------------------- settings
+Private Sub cboPalette_Change()
+    If suppress Then Exit Sub
+    TitleColors.SetPalette reg, cboPalette.Value
+    TitleColors.SaveTitleReg reg
+    PaintSwatches
+End Sub
+
+Private Sub chkUnique_Change()
+    If suppress Then Exit Sub
+    TitleColors.SetSingletonUnique reg, (chkUnique.Value = True)
+    TitleColors.SaveTitleReg reg
+End Sub
+
+' ---------------------------------------------------------------- actions
+Private Sub AssignColorToSelected(ByVal color As Long)
+    Dim keys As Collection, k As Variant
+    Set keys = SelectedKeys()
+    If keys.count = 0 Then
+        MsgBox "Select one or more titles first.", vbInformation, "Title Manager"
+        Exit Sub
+    End If
+    For Each k In keys
+        TitleManager.ManualAssign reg, CStr(k), color
+    Next k
+    TitleManager.ApplyAllColors reg
+    TitleColors.SaveTitleReg reg
+    RefreshTitles
+End Sub
+
+Private Sub cmdCustom_Click()
+    Dim keys As Collection
+    Set keys = SelectedKeys()
+    If keys.count = 0 Then
+        MsgBox "Select one or more titles first.", vbInformation, "Title Manager"
+        Exit Sub
+    End If
+    Dim s As String, c As Long
+    s = InputBox("Enter a custom color as a hex code (#1E5AA8) or R,G,B (30,90,168):", _
+                 "Custom Color")
+    If Trim$(s) = "" Then Exit Sub
+    If Not ParseColorInput(s, c) Then
+        MsgBox "Couldn't read that color. Use #RRGGBB or R,G,B (each 0-255).", vbExclamation, "Title Manager"
+        Exit Sub
+    End If
+    AssignColorToSelected c
+End Sub
+
+Private Sub cmdAuto_Click()
+    TitleManager.AutoAssign reg
+    TitleManager.ApplyAllColors reg
+    TitleColors.SaveTitleReg reg
+    RefreshTitles
+End Sub
+
+Private Sub cmdRelease_Click()
+    Dim keys As Collection, k As Variant
+    Set keys = SelectedKeys()
+    If keys.count = 0 Then
+        MsgBox "Select the manually-colored titles you want to release back to the auto pool.", _
+               vbInformation, "Title Manager"
+        Exit Sub
+    End If
+    For Each k In keys
+        TitleManager.ReleaseToAuto reg, CStr(k)
+    Next k
+    TitleColors.SaveTitleReg reg
+    RefreshTitles
+    MsgBox "Released. Click Auto-Assign All to randomize the released title(s).", _
+           vbInformation, "Title Manager"
+End Sub
+
+Private Sub cmdClear_Click()
+    Dim keys As Collection, k As Variant
+    Set keys = SelectedKeys()
+    If keys.count = 0 Then
+        MsgBox "Select one or more titles first.", vbInformation, "Title Manager"
+        Exit Sub
+    End If
+    For Each k In keys
+        TitleManager.ClearTitle reg, CStr(k)
+    Next k
+    TitleManager.ApplyAllColors reg
+    TitleColors.SaveTitleReg reg
+    RefreshTitles
+End Sub
+
+Private Sub cmdClose_Click()
+    Unload Me
+End Sub
+
+' ---------------------------------------------------------------- helpers
+Private Function SelectedKeys() As Collection
+    Dim c As Collection, i As Long
+    Set c = New Collection
+    For i = 0 To lstTitles.ListCount - 1
+        If lstTitles.Selected(i) Then
+            If i <= keyCount - 1 Then c.Add titleKeys(i)
+        End If
+    Next i
+    Set SelectedKeys = c
+End Function
+
+Private Function SelectedKeySet() As Object
+    Dim d As Object, k As Variant
+    Set d = CreateObject("Scripting.Dictionary")
+    d.CompareMode = vbTextCompare
+    For Each k In SelectedKeys()
+        If Not d.Exists(CStr(k)) Then d(CStr(k)) = True
+    Next k
+    Set SelectedKeySet = d
+End Function
+
+Private Function FirstSelectedKey() As String
+    Dim i As Long
+    For i = 0 To lstTitles.ListCount - 1
+        If lstTitles.Selected(i) Then
+            If i <= keyCount - 1 Then FirstSelectedKey = titleKeys(i)
+            Exit Function
+        End If
+    Next i
+End Function
+
+Private Function ColorLabel(ByVal key As String) As String
+    If Not TitleColors.HasColor(reg, key) Then
+        ColorLabel = "-- none --"
+        Exit Function
+    End If
+    Dim c As Long
+    c = TitleColors.GetTitleColor(reg, key)
+    ColorLabel = HexOf(c) & IIf(TitleColors.GetTitleManual(reg, key), " (M)", "")
+End Function
+
+Private Function HexOf(ByVal c As Long) As String
+    Dim r As Long, g As Long, b As Long
+    r = c And &HFF
+    g = (c \ &H100) And &HFF
+    b = (c \ &H10000) And &HFF
+    HexOf = "#" & Right$("0" & Hex$(r), 2) & Right$("0" & Hex$(g), 2) & Right$("0" & Hex$(b), 2)
+End Function
+
+Private Function ParseColorInput(ByVal s As String, ByRef c As Long) As Boolean
+    Dim parts() As String, r As Long, g As Long, b As Long
+    s = Trim$(s)
+    If s = "" Then Exit Function
+    If InStr(s, ",") > 0 Then
+        parts = Split(s, ",")
+        If UBound(parts) <> 2 Then Exit Function
+        If Not IsNumeric(parts(0)) Then Exit Function
+        If Not IsNumeric(parts(1)) Then Exit Function
+        If Not IsNumeric(parts(2)) Then Exit Function
+        r = CLng(parts(0)): g = CLng(parts(1)): b = CLng(parts(2))
+        If r < 0 Or r > 255 Or g < 0 Or g > 255 Or b < 0 Or b > 255 Then Exit Function
+        c = RGB(r, g, b)
+        ParseColorInput = True
+        Exit Function
+    End If
+    If Left$(s, 1) = "#" Then s = Mid$(s, 2)
+    If Len(s) <> 6 Then Exit Function
+    On Error GoTo bad
+    r = CLng("&H" & Left$(s, 2))
+    g = CLng("&H" & Mid$(s, 3, 2))
+    b = CLng("&H" & Right$(s, 2))
+    c = RGB(r, g, b)
+    ParseColorInput = True
+    Exit Function
+bad:
+End Function

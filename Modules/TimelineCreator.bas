@@ -150,7 +150,9 @@ Private Function RenderTimeline(ByVal sld As slide, ByRef events() As TLEvent, B
                                ByVal timelineType As String, ByVal timelineColor As String, _
                                ByVal allowGaps As Boolean, ByVal allowMulti As Boolean, _
                                ByVal doWipe As Boolean, ByVal allowWeighted As Boolean, _
-                               ByRef summary As String) As Boolean
+                               ByRef summary As String, _
+                               Optional ByVal forcedScale As Single = 0, _
+                               Optional ByVal forcedCols As Long = 0) As Boolean
     Dim i As Long
     For i = 1 To n
         events(i).UnitStart = UnitStartOf(events(i).RawDate, timelineType)
@@ -170,7 +172,7 @@ Private Function RenderTimeline(ByVal sld As slide, ByRef events() As TLEvent, B
 
     ClearPriorOutput sld
     summary = DrawTimeline(sld, events, n, cols, nCols, timelineType, timelineColor, _
-                           allowMulti, doWipe, allowWeighted)
+                           allowMulti, doWipe, allowWeighted, forcedScale, forcedCols)
     StoreTimelineState sld, events, n, timelineType, timelineColor, allowGaps, allowMulti, doWipe, allowWeighted
     RenderTimeline = True
 End Function
@@ -288,8 +290,8 @@ Private Function ParseDateCell(ByVal v As Variant, ByRef ev As TLEvent) As Boole
 
     Dim parts() As String
     parts = Split(s, " ")
-    If UBound(parts) >= 1 Then
-        mo = MonthFromName(parts(0))
+    If UBound(parts) = 1 Then          ' EXACTLY "<Month> <Year>"; "March 3, 2021" must fall
+        mo = MonthFromName(parts(0))   ' through to the IsDate branch or its DAY is dropped
         If mo > 0 And IsNumeric(parts(UBound(parts))) Then
             yr = CInt(parts(UBound(parts)))
             If yr >= 1000 And yr <= 9999 Then
@@ -329,26 +331,46 @@ Private Function MonthFromName(ByVal s As String) As Integer
 End Function
 
 Private Function FormatTime(ByVal v As Variant) As String
+    Dim s As String
     On Error Resume Next
     If IsNumeric(v) Then                       ' Excel/CSV store a clock time as a 0..1 fraction of a day
         FormatTime = Format$(CDate(CDbl(v)), "h:mm AM/PM")
-    ElseIf IsDate(v) Then
-        FormatTime = Format$(CDate(v), "h:mm AM/PM")
     Else
-        FormatTime = CStr(v & "")
+        s = NormalizeMeridiem(CStr(v & ""))
+        If IsDate(s) Then
+            FormatTime = Format$(CDate(s), "h:mm AM/PM")
+        Else
+            FormatTime = CStr(v & "")          ' last resort: show the raw text
+        End If
     End If
 End Function
 
 ' The clock time as a 0..1 fraction of a day (drops any whole-day part).
 Private Function TimeFractionOf(ByVal v As Variant) As Double
-    Dim d As Date
+    Dim d As Date, s As String
     On Error Resume Next
     If IsNumeric(v) Then
         TimeFractionOf = CDbl(v) - Int(CDbl(v))
-    ElseIf IsDate(v) Then
-        d = CDate(v)
-        TimeFractionOf = CDbl(d) - Int(CDbl(d))
+    Else
+        s = NormalizeMeridiem(CStr(v & ""))
+        If IsDate(s) Then
+            d = CDate(s)
+            TimeFractionOf = CDbl(d) - Int(CDbl(d))
+        End If
     End If
+End Function
+
+' Turn "a.m."/"p.m." (with periods and/or spaces, any case) into the "AM"/"PM" that VBA's
+' IsDate/CDate actually understand. Without this, every "1:00 a.m." parsed to MIDNIGHT (so
+' the entry imported time-less and snapped to the start of its day).
+Private Function NormalizeMeridiem(ByVal s As String) As String
+    s = Replace(s, "a. m.", "am", 1, -1, vbTextCompare)
+    s = Replace(s, "p. m.", "pm", 1, -1, vbTextCompare)
+    s = Replace(s, "a.m.", "am", 1, -1, vbTextCompare)
+    s = Replace(s, "p.m.", "pm", 1, -1, vbTextCompare)
+    s = Replace(s, "a.m", "am", 1, -1, vbTextCompare)
+    s = Replace(s, "p.m", "pm", 1, -1, vbTextCompare)
+    NormalizeMeridiem = Trim$(s)
 End Function
 
 Private Sub SortEvents(ByRef ev() As TLEvent, ByVal n As Long)
@@ -381,6 +403,7 @@ End Function
 ' (So Dec 2000 - Jan 2001 full dates -> Days, not Years just because it crosses a year boundary.)
 Private Function DetectType(ByRef ev() As TLEvent, ByVal n As Long) As String
     Dim yrs As Object, mos As Object, dys As Object, hrs As Object, i As Long, finest As Integer
+    Dim minR As Double, maxR As Double, spanDays As Double
     Set yrs = CreateObject("Scripting.Dictionary")
     Set mos = CreateObject("Scripting.Dictionary")
     Set dys = CreateObject("Scripting.Dictionary")
@@ -392,9 +415,18 @@ Private Function DetectType(ByRef ev() As TLEvent, ByVal n As Long) As String
         dys(CLng(Int(CDbl(ev(i).RawDate)))) = 1
         hrs(CLng(Int(CDbl(ev(i).RawDate))) * 24 + Hour(ev(i).RawDate)) = 1
         If ev(i).Prec > finest Then finest = ev(i).Prec
+        If i = 1 Then
+            minR = CDbl(ev(i).RawDate): maxR = minR
+        Else
+            If CDbl(ev(i).RawDate) < minR Then minR = CDbl(ev(i).RawDate)
+            If CDbl(ev(i).RawDate) > maxR Then maxR = CDbl(ev(i).RawDate)
+        End If
     Next i
-    ' finest precision present, stepping coarser only if that level has <2 distinct values
-    If finest >= 4 And hrs.count >= 2 Then DetectType = "Hours": Exit Function
+    spanDays = maxR - minR
+    ' finest precision present, stepping coarser only if that level has <2 distinct values.
+    ' Hours also needs the data to actually LIVE in an hours window (span <= ~2 days) - a
+    ' multi-day chronology that merely has clock times is a Days timeline, not 100+ hour columns.
+    If finest >= 4 And hrs.count >= 2 And spanDays <= 2 Then DetectType = "Hours": Exit Function
     If finest >= 3 And dys.count >= 2 Then DetectType = "Days": Exit Function
     If finest >= 2 And mos.count >= 2 Then DetectType = "Months": Exit Function
     If yrs.count >= 2 Then DetectType = "Years": Exit Function
@@ -482,7 +514,9 @@ Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, 
                               ByRef cols() As Date, ByVal nCols As Long, _
                               ByVal t As String, ByVal barColor As String, _
                               ByVal allowMulti As Boolean, ByVal doWipe As Boolean, _
-                              ByVal allowWeighted As Boolean) As String
+                              ByVal allowWeighted As Boolean, _
+                              Optional ByVal forcedScale As Single = 0, _
+                              Optional ByVal forcedCols As Long = 0) As String
     Dim sw As Single, sh As Single
     sw = firstSlide.parent.PageSetup.slideWidth
     sh = firstSlide.parent.PageSetup.slideHeight
@@ -498,6 +532,11 @@ Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, 
         colsPerSlide = CLng(MaxS(1, Int(sw / MIN_COL_W)))
         If colsPerSlide > nCols Then colsPerSlide = nCols
     End If
+    If forcedCols > 0 Then                    ' Timeline Resize: caller dictates columns/slide (drives pagination)
+        colsPerSlide = forcedCols
+        If colsPerSlide > nCols Then colsPerSlide = nCols
+        If colsPerSlide < 1 Then colsPerSlide = 1
+    End If
 
     Dim pageCount As Long, drawn As Long, overflowMsg As String, p As Long
     pageCount = -Int(-nCols / colsPerSlide)
@@ -507,6 +546,12 @@ Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, 
     Dim availH As Single
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
+    ' When the caller forces a size, the lane-packing decision must be made against the
+    ' SCALED height budget (availH / forcedScale), so crowded columns pack into side-by-side
+    ' lanes to fit the bigger text. Autofit (forcedScale = 0) keeps the original unscaled gate.
+    Dim laneAvailH As Single
+    If forcedScale > 0 Then laneAvailH = availH / forcedScale Else laneAvailH = availH
+
     ' Pass 1: ONE font scale for the whole timeline (the most-crowded slide sets it), so the
     ' date-box and entry-box text is the same size on every slide.
     Dim pageCols() As Date, pn As Long, pMaxH As Single, globalMaxH As Single
@@ -514,24 +559,31 @@ Private Function DrawTimeline(ByVal firstSlide As slide, ByRef ev() As TLEvent, 
     globalMaxH = 0
     For p = 1 To pageCount
         PageColumns p, colsPerSlide, nCols, cols, pageCols, pn
-        ComputePageLayout pn, pageCols, ev, n, sw, availH, allowWeighted, cwTmp, clTmp, lnTmp, pMaxH
+        ComputePageLayout pn, pageCols, ev, n, sw, laneAvailH, allowWeighted, cwTmp, clTmp, lnTmp, pMaxH
         If pMaxH > globalMaxH Then globalMaxH = pMaxH
     Next p
     Dim globalSc As Single
-    globalSc = 1
-    If globalMaxH > availH And globalMaxH > 0 Then globalSc = availH / globalMaxH
-    If globalSc < MIN_SCALE Then
-        globalSc = MIN_SCALE
-        overflowMsg = vbCrLf & "NOTE: content exceeds one slide even at minimum size on some columns." & _
-                      vbCrLf & "Consider multi-slide split, gaps, or trimming descriptions."
+    If forcedScale > 0 Then
+        ' Timeline Resize: honor the user's exact size - don't autofit-shrink or cap at 1x.
+        globalSc = forcedScale
+        If globalMaxH > 0 And globalMaxH * globalSc > availH Then _
+            overflowMsg = vbCrLf & "NOTE: at this size some columns run past the slide edge."
+    Else
+        globalSc = 1
+        If globalMaxH > availH And globalMaxH > 0 Then globalSc = availH / globalMaxH
+        If globalSc < MIN_SCALE Then
+            globalSc = MIN_SCALE
+            overflowMsg = vbCrLf & "NOTE: content exceeds one slide even at minimum size on some columns." & _
+                          vbCrLf & "Consider multi-slide split, gaps, or trimming descriptions."
+        End If
+        If globalSc > 1 Then globalSc = 1
     End If
-    If globalSc > 1 Then globalSc = 1
 
     ' Pass 2: draw every slide at that single scale.
     For p = 1 To pageCount
         PageColumns p, colsPerSlide, nCols, cols, pageCols, pn
         If p > 1 Then Set sld = NewPageSlide(firstSlide)
-        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, allowWeighted, overflowMsg, globalSc)
+        drawn = drawn + DrawPage(sld, ev, n, pageCols, pn, t, barColor, sw, sh, doWipe, allowWeighted, overflowMsg, globalSc, forcedScale)
     Next p
 
     DrawTimeline = "Events drawn: " & drawn & " of " & n & vbCrLf & _
@@ -542,12 +594,18 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
                           ByRef pageCols() As Date, ByVal pn As Long, ByVal t As String, _
                           ByVal barColor As String, ByVal sw As Single, ByVal sh As Single, _
                           ByVal doWipe As Boolean, ByVal allowWeighted As Boolean, _
-                          ByRef overflowMsg As String, ByVal forcedSc As Single) As Long
+                          ByRef overflowMsg As String, ByVal forcedSc As Single, _
+                          Optional ByVal forcedScale As Single = 0) As Long
     Dim availH As Single, ci As Long
     availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
 
+    ' Match the lane-packing budget the scale pass used (see DrawTimeline): forced size packs
+    ' against availH / forcedScale so lanes(ci) here agrees with the fit that was computed.
+    Dim laneAvailH As Single
+    If forcedScale > 0 Then laneAvailH = availH / forcedScale Else laneAvailH = availH
+
     Dim colWArr() As Single, colLArr() As Single, lanes() As Long, maxH As Single
-    ComputePageLayout pn, pageCols, ev, n, sw, availH, allowWeighted, colWArr, colLArr, lanes, maxH
+    ComputePageLayout pn, pageCols, ev, n, sw, laneAvailH, allowWeighted, colWArr, colLArr, lanes, maxH
 
     ' Use the timeline-wide scale (forcedSc) so text matches across slides; fall back to a
     ' per-page scale only if no global one was supplied.
@@ -925,10 +983,12 @@ Private Function ActiveTargetSlide() As slide
     If ActiveTargetSlide Is Nothing Then Set ActiveTargetSlide = ActivePresentation.Slides(1)
 End Function
 
+' A continuation page is stamped with its OWNER (the primary slide's SlideID), so re-rendering
+' one timeline can never delete another timeline's pages.
 Private Function NewPageSlide(ByVal refSlide As slide) As slide
     Dim s As slide
     Set s = ActivePresentation.Slides.Add(ActivePresentation.Slides.count + 1, ppLayoutBlank)
-    s.Tags.Add SLIDE_TAG, "1"
+    s.Tags.Add SLIDE_TAG, CStr(refSlide.SlideID)
     Set NewPageSlide = s
 End Function
 
@@ -938,10 +998,26 @@ Private Sub ClearPriorOutput(ByVal sld As slide)
         If (sld.Shapes(i).Tags("TLENTRY") = "1") Or IsDateBar(sld.Shapes(i)) _
            Or (sld.Shapes(i).Name Like SHAPE_PREFIX & "*") Then sld.Shapes(i).Delete
     Next i
-    Dim s As Long
+
+    ' Delete only THIS timeline's continuation pages. Legacy pages (stamped "1" before pages
+    ' carried an owner) are only safe to remove when this deck holds a single timeline.
+    ' NOTE: ClearPriorOutput runs BEFORE StoreTimelineState, so this slide has no TLDATA_N yet.
+    ' Gate legacy cleanup on OTHER data-bearing timelines (excluding this slide), not the raw
+    ' total - otherwise a first Make Timeline beside a legacy timeline would wrongly count 1 and
+    ' delete the OTHER timeline's "1"-tagged pages.
+    Dim s As Long, tv As String, owner As String, legacyOK As Boolean
+    owner = CStr(sld.SlideID)
+    legacyOK = (CountOtherTimelineDataSlides(sld) = 0)
     For s = ActivePresentation.Slides.count To 1 Step -1
         If ActivePresentation.Slides(s).SlideIndex <> sld.SlideIndex Then
-            If ActivePresentation.Slides(s).Tags(SLIDE_TAG) = "1" Then ActivePresentation.Slides(s).Delete
+            tv = ActivePresentation.Slides(s).Tags(SLIDE_TAG)
+            If tv <> "" Then
+                If tv = owner Then
+                    ActivePresentation.Slides(s).Delete
+                ElseIf legacyOK And tv = "1" Then
+                    ActivePresentation.Slides(s).Delete
+                End If
+            End If
         End If
     Next s
 End Sub
@@ -1222,7 +1298,10 @@ Public Sub ToggleWeightedTimeline(control As IRibbonControl)
     Dim ev() As TLEvent, n As Long, t As String, color As String
     Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
     If Not LoadTimelineState(sld, ev, n, t, color, gaps, multi, wipe, weighted) Then
-        MsgBox "Couldn't read the stored timeline data on this slide.", vbExclamation, "Weighted Timeline": Exit Sub
+        MsgBox "Couldn't read the stored timeline data on this slide." & vbCrLf & vbCrLf & _
+               "If you duplicated a timeline slide, PowerPoint drops the saved data on the copy - " & _
+               "rebuild it with Make Timeline (the original slide keeps its data).", _
+               vbExclamation, "Weighted Timeline": Exit Sub
     End If
 
     weighted = Not weighted
@@ -1235,6 +1314,166 @@ Public Sub ToggleWeightedTimeline(control As IRibbonControl)
 Fail:
     MsgBox "Toggle failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Weighted Timeline"
 End Sub
+
+' ============================================================================
+' TIMELINE RESIZE  -  set the entry font size and reflow (offer multi-slide)
+' ============================================================================
+' Redraws the imported timeline at a user-chosen entry font size (date box +
+' description). If it doesn't fit at that size, offers to spread the date columns
+' across more slides so it fits (fewer columns per slide -> wider columns -> more
+' side-by-side lanes -> shorter stacks); otherwise draws it with the overflow
+' running off the slide edge. Imported timelines only (needs the stored data).
+Public Sub TimelineResize(control As IRibbonControl)
+    On Error GoTo Fail
+    Dim sld As slide
+    Set sld = FindTimelineSlide()
+    If sld Is Nothing Then
+        MsgBox "Timeline Resize works on a timeline made with Make Timeline (it carries the saved entry data)." & vbCrLf & vbCrLf & _
+               "This slide has no stored timeline to resize.", vbExclamation, "Timeline Resize"
+        Exit Sub
+    End If
+
+    Dim ev() As TLEvent, n As Long, t As String, color As String
+    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
+    If Not LoadTimelineState(sld, ev, n, t, color, gaps, multi, wipe, weighted) Then
+        MsgBox "Couldn't read the stored timeline data on this slide." & vbCrLf & vbCrLf & _
+               "If you duplicated a timeline slide, PowerPoint drops the saved data on the copy - " & _
+               "rebuild it with Make Timeline (the original slide keeps its data).", _
+               vbExclamation, "Timeline Resize"
+        Exit Sub
+    End If
+
+    ' rebuild the geometry the layout needs (same prep RenderTimeline does)
+    Dim i As Long
+    For i = 1 To n
+        ev(i).UnitStart = UnitStartOf(ev(i).RawDate, t)
+        ev(i).UnitFrac = UnitFracOf(ev(i).RawDate, t)
+    Next i
+    Dim cols() As Date, nCols As Long
+    nCols = ComputeColumns(ev, n, t, gaps, cols)
+    If nCols < 1 Then
+        MsgBox "No columns to lay out.", vbExclamation, "Timeline Resize"
+        Exit Sub
+    End If
+    For i = 1 To n
+        ev(i).DescH = MeasureDescHeight(sld, ev(i).Desc, BOX_WIDTH - 2 * COL_PAD, "Arial", FS_DESC)
+    Next i
+
+    Dim sw As Single, sh As Single, availH As Single
+    sw = sld.parent.PageSetup.slideWidth
+    sh = sld.parent.PageSetup.slideHeight
+    availH = sh - (BAND_TOP + BAND_HEIGHT + BAND_GAP) - MARGIN
+
+    ' the engine's default columns-per-slide (what a normal draw would use)
+    Dim defaultCols As Long
+    defaultCols = nCols
+    If multi Then
+        defaultCols = CLng(MaxS(1, Int(sw / MIN_COL_W)))
+        If defaultCols > nCols Then defaultCols = nCols
+    End If
+
+    ' current effective size, for the prompt default
+    Dim hDefault As Single, curSc As Single, curSize As Long
+    hDefault = TimelineMaxHeight(ev, n, cols, nCols, defaultCols, sw, availH, weighted)
+    curSc = 1
+    If hDefault > availH And hDefault > 0 Then curSc = availH / hDefault
+    If curSc < MIN_SCALE Then curSc = MIN_SCALE
+    If curSc > 1 Then curSc = 1
+    curSize = Int(12 * curSc + 0.5)
+    If curSize < 5 Then curSize = 5
+
+    Dim resp As String
+    resp = InputBox("Enter the font size (points) for all timeline entries" & vbCrLf & _
+                    "(date box + description). The current size is about " & curSize & " pt.", _
+                    "Timeline Resize", CStr(curSize))
+    If Trim$(resp) = "" Then Exit Sub                 ' cancelled / empty
+    If Not IsNumeric(resp) Then
+        MsgBox "Please enter a number (font size in points).", vbExclamation, "Timeline Resize"
+        Exit Sub
+    End If
+    Dim fontSize As Single
+    fontSize = CSng(Val(resp))
+    If fontSize < 5 Or fontSize > 96 Then
+        MsgBox "Enter a font size between 5 and 96 points.", vbExclamation, "Timeline Resize"
+        Exit Sub
+    End If
+    Dim forcedScale As Single
+    forcedScale = fontSize / 12                       ' base drawn font is 12 * scale
+
+    ' Lane-packing budget at this size (matches DrawTimeline): a column packs into lanes when
+    ' its unscaled stack exceeds availH / forcedScale, i.e. its SCALED stack exceeds the slide.
+    Dim laneBudget As Single
+    laneBudget = availH / forcedScale
+
+    ' decide pagination so it fits at this size
+    Dim chosenCols As Long, doPaginate As Boolean
+    chosenCols = defaultCols
+    If TimelineMaxHeight(ev, n, cols, nCols, defaultCols, sw, laneBudget, weighted) * forcedScale > availH Then
+        ' find the largest cols-per-slide that fits at this size (fewest extra slides)
+        Dim c As Long, fitCols As Long, h As Single, pages As Long
+        fitCols = 0
+        For c = defaultCols To 1 Step -1
+            h = TimelineMaxHeight(ev, n, cols, nCols, c, sw, laneBudget, weighted)
+            If h * forcedScale <= availH Then
+                fitCols = c
+                Exit For
+            End If
+        Next c
+
+        If fitCols >= 1 And fitCols < defaultCols Then
+            pages = -Int(-nCols / fitCols)
+            Select Case MsgBox(fontSize & " pt is too big to fit the entries on the current layout." & vbCrLf & vbCrLf & _
+                    "Spread the timeline across " & pages & " slide(s) so it fits at this size?" & vbCrLf & vbCrLf & _
+                    "Yes  -  add slides automatically." & vbCrLf & _
+                    "No   -  keep the current slide count (overflow runs off the slide edge).", _
+                    vbYesNoCancel + vbQuestion, "Timeline Resize")
+                Case vbYes: chosenCols = fitCols: doPaginate = True
+                Case vbNo: chosenCols = defaultCols
+                Case Else: Exit Sub
+            End Select
+        Else
+            ' too big to fit even one date column on its own slide
+            Select Case MsgBox(fontSize & " pt is too big to fit even one date column on a slide." & vbCrLf & vbCrLf & _
+                    "Spread across the maximum number of slides anyway (some overflow may remain), " & _
+                    "or keep the current layout with the overflow running off the slide edge?" & vbCrLf & vbCrLf & _
+                    "Yes  -  spread across the most slides." & vbCrLf & _
+                    "No   -  keep current slides, overflow off-slide.", _
+                    vbYesNoCancel + vbExclamation, "Timeline Resize")
+                Case vbYes: chosenCols = 1: doPaginate = True
+                Case vbNo: chosenCols = defaultCols
+                Case Else: Exit Sub
+            End Select
+        End If
+    End If
+
+    If doPaginate Then multi = True                   ' persist that it's now multi-slide
+
+    Dim summary As String
+    If RenderTimeline(sld, ev, n, t, color, gaps, multi, wipe, weighted, summary, forcedScale, chosenCols) Then
+        MsgBox "Entries resized to " & fontSize & " pt." & vbCrLf & vbCrLf & summary, vbInformation, "Timeline Resize"
+    End If
+    Exit Sub
+Fail:
+    MsgBox "Timeline Resize failed:" & vbCrLf & vbCrLf & Err.Description, vbCritical, "Timeline Resize"
+End Sub
+
+' Pass-1 layout height for a given cols-per-slide (mirrors DrawTimeline's scale pass).
+' Assumes ev().DescH is already measured. Returns the tallest column's unscaled height.
+Private Function TimelineMaxHeight(ByRef ev() As TLEvent, ByVal n As Long, ByRef cols() As Date, _
+        ByVal nCols As Long, ByVal colsPerSlide As Long, ByVal sw As Single, ByVal availH As Single, _
+        ByVal allowWeighted As Boolean) As Single
+    Dim pageCount As Long, p As Long, pn As Long, pMaxH As Single, gMax As Single
+    Dim pageCols() As Date, cwTmp() As Single, clTmp() As Single, lnTmp() As Long
+    If colsPerSlide < 1 Then colsPerSlide = 1
+    pageCount = -Int(-nCols / colsPerSlide)
+    gMax = 0
+    For p = 1 To pageCount
+        PageColumns p, colsPerSlide, nCols, cols, pageCols, pn
+        ComputePageLayout pn, pageCols, ev, n, sw, availH, allowWeighted, cwTmp, clTmp, lnTmp, pMaxH
+        If pMaxH > gMax Then gMax = pMaxH
+    Next p
+    TimelineMaxHeight = gMax
+End Function
 
 ' --- source/state persistence (slide tags) so the toggle can re-flow in place ----
 Private Sub StoreTimelineState(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As Long, _
@@ -1290,15 +1529,53 @@ CleanFail:
     LoadTimelineState = False
 End Function
 
+' The slide to edit - always prefer the one the user is LOOKING AT. If the active slide
+' carries stored data, use it. If it has no data but is visibly a timeline (duplicating a
+' slide drops slide-level tags), still return it, so the caller reports "this copy lost its
+' data" instead of silently rebuilding a different, off-screen timeline.
 Private Function FindTimelineSlide() As slide
-    Dim a As slide, s As slide
+    Dim a As slide, s As slide, ownerID As String
     Set a = ActiveTargetSlide()
     If Not a Is Nothing Then
         If Len(a.Tags("TLDATA_N")) > 0 Then Set FindTimelineSlide = a: Exit Function
+        ownerID = a.Tags(SLIDE_TAG)                 ' set only on continuation pages = owner's SlideID
+        If Len(ownerID) > 0 Then                    ' a continuation page -> hand back its OWNER (the primary)
+            For Each s In ActivePresentation.Slides
+                If Len(s.Tags("TLDATA_N")) > 0 Then
+                    If CStr(s.SlideID) = ownerID Then Set FindTimelineSlide = s: Exit Function
+                End If
+            Next s
+            ' legacy "1"-tagged page or owner deleted -> fall through to the generic scan below
+        ElseIf SlideLooksLikeTimeline(a) Then       ' a tag-less duplicated / hand-built copy
+            Set FindTimelineSlide = a: Exit Function ' caller then reports "this copy lost its data"
+        End If
     End If
     For Each s In ActivePresentation.Slides
         If Len(s.Tags("TLDATA_N")) > 0 Then Set FindTimelineSlide = s: Exit Function
     Next s
+End Function
+
+' Visible evidence that a slide is a timeline: a datebar, or at least one entry group.
+Public Function SlideLooksLikeTimeline(ByVal sld As slide) As Boolean
+    Dim acc As Collection
+    If sld Is Nothing Then Exit Function
+    If Not FindDateBar(sld) Is Nothing Then SlideLooksLikeTimeline = True: Exit Function
+    Set acc = New Collection
+    CollectEntryGroups sld.Shapes, acc
+    SlideLooksLikeTimeline = (acc.count > 0)
+End Function
+
+' How many OTHER slides (not the one being rebuilt) carry stored timeline data - used to
+' decide whether legacy, owner-less continuation pages can safely be cleaned up. Excluding the
+' current slide is what makes this correct at ClearPriorOutput time, before its data is stored.
+Private Function CountOtherTimelineDataSlides(ByVal sld As slide) As Long
+    Dim s As slide, n As Long
+    For Each s In ActivePresentation.Slides
+        If s.SlideIndex <> sld.SlideIndex Then
+            If Len(s.Tags("TLDATA_N")) > 0 Then n = n + 1
+        End If
+    Next s
+    CountOtherTimelineDataSlides = n
 End Function
 
 Private Sub SetTag(ByVal sld As slide, ByVal tagKey As String, ByVal tagVal As String)
@@ -1356,21 +1633,73 @@ Private Function ShapeTagVal(ByVal shp As Shape, ByVal key As String) As String
     On Error GoTo 0
 End Function
 
-' Robust unit: the bar's TLType tag -> stored slide state -> inferred from the bar labels.
+' Robust unit, ordered by how trustworthy the evidence is:
+'   1. the bar's own TLType tag - UNLESS its own visible labels confidently say otherwise
+'      (a copied/relabelled bar keeps the old tag, and what you can read wins)
+'   2. the unit inferred from the bar's own labels
+'   3. state stored on THIS slide only - never another slide's timeline, which used to let
+'      a foreign imported timeline dictate the unit for an unrelated bar.
 Public Function BarUnit(ByVal sld As slide, ByVal bar As Shape) As String
-    Dim t As String
+    Dim tagT As String, infT As String, stT As String
     Dim ev() As TLEvent, n As Long, color As String
-    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean, tlSlide As slide
-    If Not bar Is Nothing Then t = ShapeTagVal(bar, "TLType")
-    If t <> "" Then BarUnit = t: Exit Function
-    Set tlSlide = FindTimelineSlide()
-    If Not tlSlide Is Nothing Then
-        If LoadTimelineState(tlSlide, ev, n, t, color, gaps, multi, wipe, weighted) Then
-            If t <> "" Then BarUnit = t: Exit Function
-        End If
+    Dim gaps As Boolean, multi As Boolean, wipe As Boolean, weighted As Boolean
+
+    If Not bar Is Nothing Then
+        tagT = ShapeTagVal(bar, "TLType")
+        infT = InferBarUnit(bar)
     End If
-    If Not bar Is Nothing Then t = InferBarUnit(bar)
-    BarUnit = t
+
+    If tagT <> "" Then
+        ' Only DOMINANT visible evidence may overrule an explicit tag - a single stray label
+        ' must not flip a correctly-tagged bar (and a two-bar bar is deliberately inconclusive).
+        Dim conf As String
+        conf = ConfidentBarUnit(bar)
+        If conf <> "" Then
+            If StrComp(tagT, conf, vbTextCompare) <> 0 Then BarUnit = conf: Exit Function
+        End If
+        BarUnit = tagT
+        Exit Function
+    End If
+    If infT <> "" Then BarUnit = infT: Exit Function
+
+    If Not sld Is Nothing Then
+        If LoadTimelineState(sld, ev, n, stT, color, gaps, multi, wipe, weighted) Then BarUnit = stT
+    End If
+End Function
+
+' A unit inferred only when at least 60% of the bar's labels agree - strong enough to
+' overrule a stale TLType tag on a genuinely relabelled bar, while a stray cell (or a
+' two-bar bar, whose rows deliberately disagree) stays inconclusive and leaves the tag alone.
+Private Function ConfidentBarUnit(ByVal bar As Shape) As String
+    Dim labels As Collection, i As Long, s As String
+    Dim tot As Long, nTime As Long, nDay As Long, nMon As Long, nYr As Long
+    If bar Is Nothing Then Exit Function
+    Set labels = New Collection
+    CollectBarLabels bar, labels
+    For i = 1 To labels.count
+        s = Trim$(CStr(labels(i)))
+        If s <> "" Then
+            tot = tot + 1
+            If LabelIsTime(s) Then nTime = nTime + 1
+            If LabelIsFullDate(s) Or LabelIsBareDay(s) Then nDay = nDay + 1
+            If LabelIsMonthName(s) Or LabelIsMonthYear(s) Then nMon = nMon + 1
+            If LabelIsYear(s) Then nYr = nYr + 1
+        End If
+    Next i
+    If tot = 0 Then Exit Function
+    If nTime * 5 >= tot * 3 Then ConfidentBarUnit = "Hours": Exit Function      ' n/tot >= 0.6
+    If nDay * 5 >= tot * 3 Then ConfidentBarUnit = "Days": Exit Function
+    If nMon * 5 >= tot * 3 Then ConfidentBarUnit = "Months": Exit Function
+    If nYr * 5 >= tot * 3 Then ConfidentBarUnit = "Years"
+End Function
+
+' How many datebars are on this slide (a duplicated bar makes "the" bar ambiguous).
+Public Function CountDateBars(ByVal sld As slide) As Long
+    Dim shp As Shape, n As Long
+    For Each shp In sld.Shapes
+        If IsDateBar(shp) Then n = n + 1
+    Next shp
+    CountDateBars = n
 End Function
 
 ' Read the bar's cell labels and guess the unit. Two-bar aware: a bottom row of bare
@@ -1419,9 +1748,18 @@ Private Sub CollectBarLabels(ByVal shp As Shape, ByRef labels As Collection)
     End If
 End Sub
 
+' A clock label: 12-hour ("9:00 AM") or 24-hour ("17:00") - Swap Time Format rewrites the
+' bar to 24-hour, which used to make a tag-less Hours bar unrecognisable.
 Private Function LabelIsTime(ByVal s As String) As Boolean
-    s = UCase$(s)
-    LabelIsTime = (InStr(s, ":") > 0) And (InStr(s, "AM") > 0 Or InStr(s, "PM") > 0)
+    Dim p() As String
+    s = Trim$(UCase$(s))
+    If InStr(s, ":") = 0 Then Exit Function
+    If InStr(s, "AM") > 0 Or InStr(s, "PM") > 0 Then LabelIsTime = True: Exit Function
+    p = Split(s, ":")
+    If UBound(p) <> 1 Then Exit Function
+    If Not IsNumeric(p(0)) Then Exit Function
+    If Not IsNumeric(p(1)) Then Exit Function
+    LabelIsTime = (CLng(p(0)) >= 0 And CLng(p(0)) <= 23 And CLng(p(1)) >= 0 And CLng(p(1)) <= 59)
 End Function
 
 Private Function LabelIsYear(ByVal s As String) As Boolean
@@ -1433,9 +1771,15 @@ Private Function LabelIsYear(ByVal s As String) As Boolean
     LabelIsYear = (y >= 1000 And y <= 2999)
 End Function
 
+' A bare day number, tolerating the ordinal suffixes Day Suffix Toggle adds ("1", "15th"),
+' so a suffixed two-bar Days bar is still inferred as Days rather than Months.
 Private Function LabelIsBareDay(ByVal s As String) As Boolean
-    Dim d As Long
+    Dim d As Long, suf As String
     s = Trim$(s)
+    If Len(s) >= 3 Then
+        suf = LCase$(Right$(s, 2))
+        If suf = "st" Or suf = "nd" Or suf = "rd" Or suf = "th" Then s = Left$(s, Len(s) - 2)
+    End If
     If Len(s) < 1 Or Len(s) > 2 Then Exit Function
     If Not IsNumeric(s) Then Exit Function
     d = CLng(s)
@@ -1617,7 +1961,8 @@ Private Sub BoxRectOf(ByVal shp As Shape, ByRef topY As Single, ByRef leftX As S
     Dim it As Shape, got As Boolean
     If shp.Type = msoGroup Then
         For Each it In shp.GroupItems
-            If Not (it.Name Like "LeadingLine*") Then
+            If Not IsLeaderShape(it) Then        ' same leader test as everywhere else, so a
+                                                 ' renamed leader can't corrupt the box bounds
                 If Not got Then
                     topY = it.Top: leftX = it.Left: botY = it.Top + it.Height: rgtX = it.Left + it.Width
                     got = True
@@ -1656,21 +2001,23 @@ Public Sub ZAxisFix(control As IRibbonControl)
 
     Dim shp As Shape, ents() As Shape, tops() As Single, cnt As Long
     Dim topY As Single, leftX As Single, botY As Single, rgtX As Single
-    ReDim ents(1 To sld.Shapes.count)
-    ReDim tops(1 To sld.Shapes.count)
-    cnt = 0
-    For Each shp In sld.Shapes
-        If IsEntryGroup(shp) Then
-            BoxRectOf shp, topY, leftX, botY, rgtX
-            cnt = cnt + 1
-            Set ents(cnt) = shp
-            tops(cnt) = topY
-        End If
-    Next shp
-    If cnt = 0 Then
-        MsgBox "No timeline entries (groups with a leader line) found on this slide.", vbExclamation, "Z Axis Fix"
+    Dim found As Collection, fv As Variant
+    Set found = New Collection
+    CollectEntryGroups sld.Shapes, found            ' nested / re-grouped entries too
+    If found.count = 0 Then
+        MsgBox "No timeline entries found on this slide.", vbExclamation, "Z Axis Fix"
         Exit Sub
     End If
+    ReDim ents(1 To found.count)
+    ReDim tops(1 To found.count)
+    cnt = 0
+    For Each fv In found
+        Set shp = fv
+        BoxRectOf shp, topY, leftX, botY, rgtX
+        cnt = cnt + 1
+        Set ents(cnt) = shp
+        tops(cnt) = topY
+    Next fv
 
     ' sort entries by box top, topmost first (insertion sort)
     Dim i As Long, j As Long, keyT As Single, keyS As Shape
@@ -1728,9 +2075,16 @@ Private Sub DateSnapCore(ByVal groupMove As Boolean)
         Exit Sub
     End If
 
-    ' Robust unit: bar tag -> stored state -> inferred from the bar -> ask the user.
+    ' Robust unit: bar tag / its own labels -> this slide's stored state -> ask the user.
     Dim bar As Shape, t As String
     Set bar = FindDateBar(sld)
+    If Not bar Is Nothing Then
+        If CountDateBars(sld) > 1 Then          ' a duplicated bar makes "the" bar ambiguous
+            If MsgBox("This slide has more than one datebar." & vbCrLf & vbCrLf & _
+                      "Entries will be snapped against '" & bar.Name & "'. Continue?", _
+                      vbOKCancel + vbExclamation, title) <> vbOK Then Exit Sub
+        End If
+    End If
     t = BarUnit(sld, bar)
     If t = "" Then t = AskTimelineUnit()
     If t = "" Then Exit Sub
@@ -1751,45 +2105,51 @@ Private Sub DateSnapCore(ByVal groupMove As Boolean)
     Dim shortLabels As Collection, shortShapes As Collection, shortTargets As Collection
     Set shortLabels = New Collection: Set shortShapes = New Collection: Set shortTargets = New Collection
 
-    For Each shp In sld.Shapes
-        If IsEntryGroup(shp) Then
-            If TryEntryDate(shp, d) Then
-                If MatchBarCell(d, t, cellLefts, lab, frac) Then
-                    innerL = cellLefts(lab) + COL_PAD
-                    innerW = cellWidths(lab) - 2 * COL_PAD
-                    If innerW < 0 Then innerW = 0
-                    targetX = innerL + frac * innerW
-                    Set ln = LeadingLineOf(shp)
-                    If ln Is Nothing Then
-                        missed = missed + 1
-                    ElseIf groupMove Then
-                        shp.Left = shp.Left + (targetX - ln.Left)
-                        snapped = snapped + 1
-                    Else
-                        BoxRectOf shp, topY, leftX, botY, rgtX     ' Line Nudge: clamp to the box bounds
-                        cx = targetX
-                        If cx < leftX Then cx = leftX
-                        If cx > rgtX Then cx = rgtX
-                        ln.Left = cx
-                        snapped = snapped + 1
-                        If cx <> targetX Then
-                            shortLabels.Add Format$(d, "mmm d, yyyy")
-                            shortShapes.Add shp
-                            shortTargets.Add targetX
-                        End If
-                    End If
-                Else
+    Dim entries As Collection, entV As Variant
+    Set entries = New Collection
+    CollectEntryGroups sld.Shapes, entries          ' nested / re-grouped entries too
+    For Each entV In entries
+        Set shp = entV
+        If TryEntryDate(shp, d) Then
+            If MatchBarCell(d, t, cellLefts, lab, frac) Then
+                innerL = cellLefts(lab) + COL_PAD
+                innerW = cellWidths(lab) - 2 * COL_PAD
+                If innerW < 0 Then innerW = 0
+                targetX = innerL + frac * innerW
+                Set ln = LeadingLineOf(shp)
+                If ln Is Nothing Then
                     missed = missed + 1
+                ElseIf groupMove Then
+                    shp.Left = shp.Left + (targetX - ln.Left)
+                    snapped = snapped + 1
+                Else
+                    BoxRectOf shp, topY, leftX, botY, rgtX     ' Line Nudge: clamp to the box bounds
+                    cx = targetX
+                    If cx < leftX Then cx = leftX
+                    If cx > rgtX Then cx = rgtX
+                    ln.Left = cx
+                    snapped = snapped + 1
+                    If cx <> targetX Then
+                        shortLabels.Add Format$(d, "mmm d, yyyy")
+                        shortShapes.Add shp
+                        shortTargets.Add targetX
+                    End If
                 End If
             Else
                 missed = missed + 1
             End If
+        Else
+            missed = missed + 1
         End If
-    Next shp
+    Next entV
 
-    Dim msg As String
+    Dim msg As String, orphans As Long
     msg = snapped & " entr" & IIf(snapped = 1, "y", "ies") & " " & IIf(groupMove, "snapped", "nudged") & " to the datebar."
     If missed > 0 Then msg = msg & vbCrLf & missed & " skipped (couldn't read the date, or its unit isn't on the bar)."
+    orphans = OrphanEntryPartCount(sld)
+    If orphans > 0 Then _
+        msg = msg & vbCrLf & orphans & " loose entry part(s) on this slide were ignored - an entry " & _
+              "looks ungrouped. Re-group it and run again."
 
     If (Not groupMove) And shortLabels.count > 0 Then
         Dim listMsg As String, k As Long, resp As VbMsgBoxResult, gm As Long
@@ -1892,7 +2252,7 @@ Public Sub PlaceEntryOnTimeline(ByVal sld As slide, ByVal newEntry As Shape, ByV
         Exit Sub
     End If
     rowTop = bar.Top + bar.Height + BAND_GAP        ' same gap below the bar as Make Timeline uses
-    Set db = FindTaggedDescendant(newEntry, "Date Box")
+    Set db = DateBoxOf(newEntry)
     If Not db Is Nothing Then newEntry.Top = newEntry.Top + (rowTop - db.Top)
     ReflowTimeline sld, bar, t
     Exit Sub
@@ -1910,30 +2270,49 @@ Private Sub ReflowTimeline(ByVal sld As slide, ByVal bar As Shape, ByVal t As St
     Set cellLefts = CreateObject("Scripting.Dictionary")
     Set cellWidths = CreateObject("Scripting.Dictionary")
     CollectBandCells bar, cellLefts, cellWidths
-    For Each shp In sld.Shapes
-        If IsEntryGroup(shp) Then
-            If TryEntryDate(shp, dd) Then
-                If MatchBarCell(dd, t, cellLefts, lab, frac) Then
-                    innerL = cellLefts(lab) + COL_PAD
-                    innerW = cellWidths(lab) - 2 * COL_PAD
-                    If innerW < 0 Then innerW = 0
-                    targetX = innerL + frac * innerW
-                    Set ln = LeadingLineOf(shp)
-                    If Not ln Is Nothing Then shp.Left = shp.Left + (targetX - ln.Left)
-                End If
+    Dim entries As Collection, v As Variant
+    Set entries = New Collection
+    CollectEntryGroups sld.Shapes, entries          ' nested / re-grouped entries too
+    For Each v In entries
+        Set shp = v
+        If TryEntryDate(shp, dd) Then
+            If MatchBarCell(dd, t, cellLefts, lab, frac) Then
+                innerL = cellLefts(lab) + COL_PAD
+                innerW = cellWidths(lab) - 2 * COL_PAD
+                If innerW < 0 Then innerW = 0
+                targetX = innerL + frac * innerW
+                Set ln = LeadingLineOf(shp)
+                If Not ln Is Nothing Then shp.Left = shp.Left + (targetX - ln.Left)
             End If
         End If
-    Next shp
+    Next v
 End Sub
 
 ' --- shared helpers for the entry-edit commands -----------------------------
-' An entry = a group with a direct LeadingLine child (Make Entry + imported entries).
+' An entry = a group that carries the TLENTRY tag, has a leader-line child, or contains a
+' tagged Date/Entry Box. Keying on the "LeadingLine*" NAME alone made a renamed leader (or
+' a hand-built entry) invisible to every edit tool.
 Private Function IsEntryGroup(ByVal shp As Shape) As Boolean
     Dim it As Shape
     If shp.Type <> msoGroup Then Exit Function
+    If IsDateBar(shp) Then Exit Function              ' a bar is never an entry (it may hold rules/lines)
+    If ShapeTagVal(shp, "TLENTRY") = "1" Then IsEntryGroup = True: Exit Function
     For Each it In shp.GroupItems
-        If it.Name Like "LeadingLine*" Then IsEntryGroup = True: Exit Function
+        If IsLeaderShape(it) Then IsEntryGroup = True: Exit Function
     Next it
+    ' A tagged box no deeper than the real entry structure (group -> boxGroup -> box = depth 2).
+    ' Bounding the depth means a WRAPPER that merely contains entries (its boxes sit at depth >=3)
+    ' is NOT itself an entry, so CollectEntryGroups descends into it and finds the real entries.
+    If Not FindTaggedChild(shp, "Date Box", 2) Is Nothing Then IsEntryGroup = True: Exit Function
+    If Not FindTaggedChild(shp, "Entry Box", 2) Is Nothing Then IsEntryGroup = True
+End Function
+
+' The leader: its name first (original behaviour), else a near-vertical straight line (a
+' renamed leader). Real leaders are AddLine(x,top,x,bottom) so Width ~ 0; the Width < 4 test
+' keeps those while rejecting a horizontal/diagonal annotation line from making its group an entry.
+Private Function IsLeaderShape(ByVal shp As Shape) As Boolean
+    If shp.Name Like "LeadingLine*" Then IsLeaderShape = True: Exit Function
+    If shp.Type = msoLine Then IsLeaderShape = (shp.Width < 4)
 End Function
 
 Private Function LeadingLineOf(ByVal entryGroup As Shape) As Shape
@@ -1942,6 +2321,114 @@ Private Function LeadingLineOf(ByVal entryGroup As Shape) As Shape
     For Each it In entryGroup.GroupItems
         If it.Name Like "LeadingLine*" Then Set LeadingLineOf = it: Exit Function
     Next it
+    For Each it In entryGroup.GroupItems              ' fall back to a renamed vertical drop line
+        If it.Type = msoLine Then
+            If it.Width < 4 Then Set LeadingLineOf = it: Exit Function
+        End If
+    Next it
+End Function
+
+' The entry's navy date box / white entry box: the GroupStyle tag first, else a heuristic -
+' entries are built date-box ABOVE entry-box, so the topmost / lowest text child stands in
+' when the tags were lost or the entry was hand-built.
+Private Function DateBoxOf(ByVal entryGroup As Shape) As Shape
+    Dim s As Shape
+    Set s = FindTaggedDescendant(entryGroup, "Date Box")
+    If Not s Is Nothing Then Set DateBoxOf = s: Exit Function
+    Set s = TopmostDateTextChild(entryGroup)        ' topmost child whose text PARSES as a date
+    If Not s Is Nothing Then Set DateBoxOf = s: Exit Function      ' beats a caption sitting above
+    Set DateBoxOf = ExtremeTextChild(entryGroup, True)
+End Function
+
+' The topmost text child whose content actually reads as a date, so a caption/label positioned
+' above the real date box (in a tag-less hand-built entry) can't be mistaken for it.
+Private Function TopmostDateTextChild(ByVal grp As Shape) As Shape
+    Dim acc As Collection, v As Variant, shp As Shape, best As Shape, ev As TLEvent
+    Set acc = New Collection
+    CollectTextLeaves grp, acc
+    For Each v In acc
+        Set shp = v
+        If ParseDateCell(CleanDateText(SafeShapeText(shp)), ev) Then
+            If best Is Nothing Then
+                Set best = shp
+            ElseIf shp.Top < best.Top Then
+                Set best = shp
+            End If
+        End If
+    Next v
+    Set TopmostDateTextChild = best
+End Function
+
+Private Function EntryBoxOf(ByVal entryGroup As Shape) As Shape
+    Dim s As Shape
+    Set s = FindTaggedDescendant(entryGroup, "Entry Box")
+    If Not s Is Nothing Then Set EntryBoxOf = s: Exit Function
+    Set EntryBoxOf = ExtremeTextChild(entryGroup, False)
+End Function
+
+Private Function ExtremeTextChild(ByVal grp As Shape, ByVal wantTop As Boolean) As Shape
+    Dim acc As Collection, v As Variant, shp As Shape, best As Shape
+    Set acc = New Collection
+    CollectTextLeaves grp, acc
+    For Each v In acc
+        Set shp = v
+        If best Is Nothing Then
+            Set best = shp
+        ElseIf wantTop Then
+            If shp.Top < best.Top Then Set best = shp
+        Else
+            If shp.Top > best.Top Then Set best = shp
+        End If
+    Next v
+    Set ExtremeTextChild = best
+End Function
+
+Private Sub CollectTextLeaves(ByVal shp As Shape, ByVal acc As Collection)
+    Dim it As Shape, s As String
+    If shp.Type = msoGroup Then
+        For Each it In shp.GroupItems
+            CollectTextLeaves it, acc
+        Next it
+        Exit Sub
+    End If
+    If IsLeaderShape(shp) Then Exit Sub
+    s = ""
+    On Error Resume Next
+    If shp.HasTextFrame Then
+        If shp.TextFrame.HasText Then s = shp.TextFrame.TextRange.text
+    End If
+    On Error GoTo 0
+    If Trim$(s) <> "" Then acc.Add shp
+End Sub
+
+' Every entry group under a container, descending through NON-entry groups (so an entry the
+' user re-grouped with something else is still found) but never into an entry itself.
+Private Sub CollectEntryGroups(ByVal shapesColl As Object, ByVal acc As Collection)
+    Dim shp As Shape
+    For Each shp In shapesColl
+        If IsDateBar(shp) Then
+            ' skip: a datebar is never an entry and never contains one
+        ElseIf IsEntryGroup(shp) Then
+            acc.Add shp
+        ElseIf shp.Type = msoGroup Then
+            CollectEntryGroups shp.GroupItems, acc
+        End If
+    Next shp
+End Sub
+
+' Loose entry parts left at slide level after someone ungrouped an entry. They are invisible
+' to every edit tool, so the tools report the count rather than silently skipping them.
+Private Function OrphanEntryPartCount(ByVal sld As slide) As Long
+    Dim shp As Shape, n As Long
+    For Each shp In sld.Shapes
+        If shp.Type <> msoGroup Then
+            If (shp.Name Like "LeadingLine*") _
+               Or (ShapeTagVal(shp, "GroupStyle") = "Date Box") _
+               Or (ShapeTagVal(shp, "GroupStyle") = "Entry Box") _
+               Or (ShapeTagVal(shp, "TLENTRY") = "1") Then n = n + 1
+        End If
+    Next shp
+    OrphanEntryPartCount = n
 End Function
 
 ' Recurse a container, recording each datebar cell by its label -> current Left/Width (absolute).
@@ -1950,6 +2437,7 @@ End Function
 ' bars (DateBar maker); recurses nested groups (e.g. a two-bar group).
 Private Sub CollectBandCells(ByVal bar As Shape, ByVal cellLefts As Object, ByVal cellWidths As Object)
     Dim it As Shape, lab As String, cd As String, dk As String
+    Dim ev As TLEvent, cellDate As Date, haveDate As Boolean
     If bar Is Nothing Then Exit Sub
     If bar.Type = msoGroup Then
         For Each it In bar.GroupItems
@@ -1964,53 +2452,205 @@ Private Sub CollectBandCells(ByVal bar As Shape, ByVal cellLefts As Object, ByVa
             cellLefts(lab) = bar.Left
             cellWidths(lab) = bar.Width
         End If
-        ' also key by the cell's tagged date (precise, disambiguates two-bar bare labels)
-        cd = ShapeTagVal(bar, "TLCellDate")
-        If cd <> "" Then
-            If IsNumeric(cd) Then
-                dk = DateKeyOf(CDate(CDbl(cd)))
-                cellLefts(dk) = bar.Left
-                cellWidths(dk) = bar.Width
+        ' Precise date key (disambiguates two-bar bare labels). Prefer a date read from the
+        ' VISIBLE label when it shows an explicit year, so a cell the user relabelled beats a
+        ' stale build-time tag; a year-less label ("15", "Mar") can't be trusted for a year,
+        ' so the tag stands in that case.
+        haveDate = False
+        If lab <> "" Then
+            If TextHasExplicitYear(lab) Then
+                If ParseDateCell(lab, ev) Then
+                    cellDate = ev.RawDate
+                    haveDate = True
+                End If
             End If
+        End If
+        If Not haveDate Then
+            cd = ShapeTagVal(bar, "TLCellDate")
+            If cd <> "" Then
+                If IsNumeric(cd) Then
+                    cellDate = CDate(CDbl(cd))
+                    haveDate = True
+                End If
+            End If
+        End If
+        If haveDate Then
+            dk = DateKeyOf(cellDate)
+            cellLefts(dk) = bar.Left
+            cellWidths(dk) = bar.Width
         End If
     End If
 End Sub
 
-' Read + parse an entry's date from its "Date Box" text (strips an appended time).
+' Resolve an entry's date by RECONCILING the visible Date Box against the stored date,
+' instead of blindly trusting the stored one. Shape tags and names copy with a duplicate,
+' so a user who duplicates an entry and retypes its Date Box would otherwise keep snapping
+' to the ORIGINAL date. Rules:
+'   * Date Box parses AND shows an explicit 4-digit year -> the Date Box wins outright.
+'   * Date Box parses WITHOUT a year (the "mmm d" Days/Hours labels physically can't show
+'     one) -> keep the month/day/time the user typed, but graft the year from the stored
+'     date, so an edit can't silently re-date the entry to the current year.
+'   * Date Box empty/unreadable -> fall back to the stored date (old behaviour).
 Private Function TryEntryDate(ByVal entryGroup As Shape, ByRef d As Date) As Boolean
-    Dim db As Shape, s As String, ev As TLEvent, fd As String
-    ' prefer the full date stashed at build time (the visible label may omit the year)
-    On Error Resume Next
-    fd = entryGroup.Tags("TLFullDate")
-    On Error GoTo 0
-    If IsNumeric(fd) Then
-        d = CDate(CDbl(fd))
-        TryEntryDate = True
+    Dim db As Shape, s As String, ev As TLEvent
+    Dim storedOK As Boolean, stored As Date, parsedOK As Boolean, parsed As Date
+
+    storedOK = StoredEntryDate(entryGroup, stored)
+
+    Set db = DateBoxOf(entryGroup)
+    If Not db Is Nothing Then
+        s = CleanDateText(SafeShapeText(db))
+        If s <> "" Then
+            If ParseDateCell(s, ev) Then
+                parsed = ev.RawDate
+                parsedOK = True
+            End If
+        End If
+    End If
+
+    If Not parsedOK Then                        ' nothing readable on screen
+        If storedOK Then
+            d = stored
+            TryEntryDate = True
+        End If
         Exit Function
     End If
-    ' otherwise parse the Date Box text (Make-Entry / manual entries carry a full date there)
-    Set db = FindTaggedDescendant(entryGroup, "Date Box")
-    If db Is Nothing Then Exit Function
-    On Error Resume Next
-    s = db.TextFrame.TextRange.text
-    On Error GoTo 0
-    s = CleanDateText(s)
-    If s = "" Then Exit Function
-    If ParseDateCell(s, ev) Then
-        d = ev.RawDate
-        TryEntryDate = True
+
+    If TextHasExplicitYear(s) Or TextHasNumericDateYear(s) Or Not storedOK Then
+        d = parsed                              ' the visible date is complete (or all we have)
+    Else                                        ' year-less label: honour the edit, keep the real year
+        d = DateSerial(Year(stored), Month(parsed), Day(parsed)) + (CDbl(parsed) - Int(CDbl(parsed)))
+    End If
+    TryEntryDate = True
+End Function
+
+' The entry's build-time date: the TLFullDate tag, else the date-encoded shape-name suffix
+' ("... YYYY MM DD HH MM", DateNameSuffix). Both survive a duplicate, so either can supply
+' the true YEAR for a year-less Date Box label.
+Private Function StoredEntryDate(ByVal entryGroup As Shape, ByRef d As Date) As Boolean
+    Dim fd As String
+    fd = ShapeTagVal(entryGroup, "TLFullDate")
+    If IsNumeric(fd) Then
+        d = CDate(CDbl(fd))
+        StoredEntryDate = True
+        Exit Function
+    End If
+    StoredEntryDate = DateFromAnyName(entryGroup, d)
+End Function
+
+Private Function DateFromAnyName(ByVal shp As Shape, ByRef d As Date) As Boolean
+    Dim it As Shape
+    If DateFromNameSuffix(shp, d) Then DateFromAnyName = True: Exit Function
+    If shp.Type = msoGroup Then
+        For Each it In shp.GroupItems
+            If DateFromAnyName(it, d) Then DateFromAnyName = True: Exit Function
+        Next it
     End If
 End Function
 
-Private Function CleanDateText(ByVal s As String) As String
-    Dim p As Long
+' Parse the trailing "YYYY MM DD HH MM" that DateNameSuffix stamps into entry shape names
+' (parts finer than the timeline unit are zeros).
+Private Function DateFromNameSuffix(ByVal shp As Shape, ByRef d As Date) As Boolean
+    Dim nm As String, p() As String, n As Long
+    Dim yy As Long, mo As Long, dd As Long, hh As Long
+    nm = ""
+    On Error Resume Next
+    nm = shp.Name
+    On Error GoTo 0
+    p = Split(Trim$(nm), " ")
+    n = UBound(p)
+    If n < 5 Then Exit Function                  ' need an entry-part word before the 5 date tokens
+    Select Case LCase$(p(n - 5))                 ' the RenameEntryParts prefixes (TimelineEntry.bas:176-189)
+        Case "timelineentry", "boxgroup", "datebox", "box", "leadingline"
+            ' a genuine date-encoded entry-part name
+        Case Else
+            Exit Function                        ' some other shape that merely ends in numbers
+    End Select
+    If Not IsNumeric(p(n)) Then Exit Function
+    If Not IsNumeric(p(n - 1)) Then Exit Function
+    If Not IsNumeric(p(n - 2)) Then Exit Function
+    If Not IsNumeric(p(n - 3)) Then Exit Function
+    If Not IsNumeric(p(n - 4)) Then Exit Function
+    yy = CLng(p(n - 4)): mo = CLng(p(n - 3)): dd = CLng(p(n - 2)): hh = CLng(p(n - 1))
+    If yy < 1000 Or yy > 9999 Then Exit Function
+    If mo > 12 Or dd > 31 Or hh > 23 Then Exit Function
+    If mo < 1 Then mo = 1
+    If dd < 1 Then dd = 1
+    d = DateSerial(yy, mo, dd) + TimeSerial(hh, 0, 0)
+    DateFromNameSuffix = True
+End Function
+
+' True when the text carries a standalone 4-digit year (1000-2999) - i.e. the label really
+' shows a year, so it can be trusted as a complete date.
+Private Function TextHasExplicitYear(ByVal s As String) As Boolean
+    Dim i As Long, ch As String, run As String, v As Long
+    s = s & " "                                  ' sentinel so a trailing run is closed
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch >= "0" And ch <= "9" Then
+            run = run & ch
+        Else
+            If Len(run) = 4 Then
+                v = CLng(run)
+                If v >= 1000 And v <= 2999 Then TextHasExplicitYear = True: Exit Function
+            End If
+            run = ""
+        End If
+    Next i
+End Function
+
+' A purely numeric date that carries a YEAR field: exactly three numeric groups joined by
+' "/" or "-" (e.g. "3/5/21", "03/05/2021", "2021-3-5"). This catches a typed 2-digit-year date
+' that TextHasExplicitYear (4-digit only) misses, while a year-less "3/5" (two groups) or a
+' "Mar 5 - 9:00" (non-numeric groups) is rejected so the year-graft branch still runs.
+Private Function TextHasNumericDateYear(ByVal s As String) As Boolean
+    Dim parts() As String, sep As String, i As Long
     s = Trim$(s)
-    p = InStr(s, vbCr): If p > 0 Then s = Left$(s, p - 1)   ' drop a wrapped 2nd line
-    p = InStr(s, vbLf): If p > 0 Then s = Left$(s, p - 1)
-    Do While InStr(s, "  ") > 0                             ' collapse the "  <time>" gap but KEEP the time (Hours mode needs it)
+    If InStr(s, "/") > 0 Then
+        sep = "/"
+    ElseIf InStr(s, "-") > 0 Then
+        sep = "-"
+    Else
+        Exit Function
+    End If
+    parts = Split(s, sep)
+    If UBound(parts) <> 2 Then Exit Function        ' need three groups (M/D/Y)
+    For i = 0 To 2
+        If Not IsNumeric(Trim$(parts(i))) Then Exit Function
+    Next i
+    TextHasNumericDateYear = True
+End Function
+
+Private Function SafeShapeText(ByVal shp As Shape) As String
+    On Error Resume Next
+    SafeShapeText = shp.TextFrame.TextRange.text
+    On Error GoTo 0
+End Function
+
+' Normalise Date Box text for parsing: fold every break/space kind into single spaces
+' (JOINING a wrapped "date / time" rather than truncating it - Hours needs the time),
+' straighten smart dashes, and drop trailing punctuation.
+Private Function CleanDateText(ByVal s As String) As String
+    s = Replace(s, vbCrLf, " ")
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    s = Replace(s, Chr$(11), " ")                ' Shift+Enter soft line break
+    s = Replace(s, Chr$(9), " ")                 ' tab
+    s = Replace(s, Chr$(160), " ")               ' non-breaking space (pasted from Word/Outlook)
+    s = Replace(s, ChrW$(8211), "-")             ' en dash
+    s = Replace(s, ChrW$(8212), "-")             ' em dash
+    Do While InStr(s, "  ") > 0
         s = Replace(s, "  ", " ")
     Loop
-    CleanDateText = Trim$(s)
+    s = NormalizeMeridiem(Trim$(s))              ' "1:00 a.m." -> "1:00 am" so CDate reads the time
+    Do While Len(s) > 0                          ' strip a trailing . , ; :
+        If InStr(".,;:", Right$(s, 1)) > 0 Then
+            s = RTrim$(Left$(s, Len(s) - 1))
+        Else
+            Exit Do
+        End If
+    Loop
+    CleanDateText = s
 End Function
 
 Private Function FindTaggedDescendant(ByVal shp As Shape, ByVal tagVal As String) As Shape
@@ -2022,6 +2662,19 @@ Private Function FindTaggedDescendant(ByVal shp As Shape, ByVal tagVal As String
         For Each it In shp.GroupItems
             Set found = FindTaggedDescendant(it, tagVal)
             If Not found Is Nothing Then Set FindTaggedDescendant = found: Exit Function
+        Next it
+    End If
+End Function
+
+' Like FindTaggedDescendant but bounded to maxDepth levels below shp (0 = shp itself only).
+Private Function FindTaggedChild(ByVal shp As Shape, ByVal tagVal As String, ByVal maxDepth As Long) As Shape
+    Dim it As Shape, found As Shape
+    If ShapeTagVal(shp, "GroupStyle") = tagVal Then Set FindTaggedChild = shp: Exit Function
+    If maxDepth <= 0 Then Exit Function
+    If shp.Type = msoGroup Then
+        For Each it In shp.GroupItems
+            Set found = FindTaggedChild(it, tagVal, maxDepth - 1)
+            If Not found Is Nothing Then Set FindTaggedChild = found: Exit Function
         Next it
     End If
 End Function
@@ -2060,7 +2713,7 @@ Public Sub PlaceEntryAtTop(control As IRibbonControl)
     For k = 1 To sr.count
         Set shp = sr(k)
         If IsEntryGroup(shp) Then
-            Set db = FindTaggedDescendant(shp, "Date Box")
+            Set db = DateBoxOf(shp)
             If Not db Is Nothing Then
                 shp.Top = shp.Top + (TARGET_TOP - db.Top)     ' date box top -> 1.15" (vertical only)
                 Set ln = LeadingLineOf(shp)

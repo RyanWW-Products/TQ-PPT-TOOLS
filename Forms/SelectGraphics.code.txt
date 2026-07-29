@@ -1,0 +1,771 @@
+' ============================================================================
+' SelectGraphics - code-behind for the Quick Graphics picker.
+' ============================================================================
+' FULL REPLACEMENT. In the VBE, open frmSelectGraphics/SelectGraphics code window
+' (double-click SelectGraphics under Forms > View Code), select ALL, and paste
+' this over it. Your form LAYOUT (.frx) and controls are untouched - this is only
+' the code module.
+'
+' CONTROLS USED (already on your form): Frame1; ListBox1..ListBox4 (+ their labels)
+' inside Frame1; buttons cmdAddSelection, CommandButton1 (import/use), cmdClose /
+' CloseButton, cmdAddCategory, cmdRemoveCategory, RemoveGraphic.
+'
+' WHAT CHANGED vs the previous version:
+'   * Categories are driven by the FOLDERS ON DISK (registry order first, then any
+'     imported folders) - so imported categories/graphics survive registry resets
+'     and add-in updates (the updater never deletes user files).
+'   * Frame1 scroll region is sized to its content after every add/remove, and the
+'     frame starts scrolled to the top.
+'   * cmdRemoveCategory removes a USER category only (built-ins are protected),
+'     deleting its folder + graphics after an explicit confirmation, then reflows.
+' ============================================================================
+Private Const APP_NAME As String = "TrialExAddin"
+Private Const CATEGORY_SECTION As String = "SelectGraphicsCategories"
+Private Const CATEGORY_KEY As String = "Categories"
+
+' Module-level variable for the base folder.
+Private BASE_FOLDER As String
+' Collection to hold all ListBoxes that display categories (1..4 are the built-ins).
+Private colCategoryListBoxes As Collection
+
+Option Explicit
+
+Private Sub UserForm_Initialize()
+    Dim folderPath1 As String, folderPath2 As String, folderPath3 As String, folderPath4 As String
+    Dim userCats As Collection, cat As Variant
+    Dim newFolderPath As String
+    Dim newLabel As MSForms.Label, newListBox As MSForms.ListBox
+
+    Me.Caption = "Select Graphics"
+    BASE_FOLDER = Environ$("APPDATA") & "\Microsoft\AddIns\Trial Ex Addin\QuickGraphics\"
+    EnsureBaseFolder
+
+    Set colCategoryListBoxes = New Collection
+
+    ' --- the four fixed (built-in) categories, on pre-placed ListBox1..4 ---
+    folderPath1 = BASE_FOLDER                     ' "General" = the QuickGraphics root
+    folderPath2 = BASE_FOLDER & "Circle of Care\"
+    folderPath3 = BASE_FOLDER & "Calendar Days\"
+    folderPath4 = BASE_FOLDER & "Highlights\"
+
+    PopulateListBox ListBox1, folderPath1
+    PopulateListBox ListBox2, folderPath2
+    PopulateListBox ListBox3, folderPath3
+    PopulateListBox ListBox4, folderPath4
+
+    ListBox1.Tag = folderPath1
+    ListBox2.Tag = folderPath2
+    ListBox3.Tag = folderPath3
+    ListBox4.Tag = folderPath4
+
+    colCategoryListBoxes.Add ListBox1
+    colCategoryListBoxes.Add ListBox2
+    colCategoryListBoxes.Add ListBox3
+    colCategoryListBoxes.Add ListBox4
+
+    ' --- user categories, driven by DISK folders (so imports can't be lost) ---
+    Set userCats = GetUserCategories()
+    For Each cat In userCats
+        newFolderPath = BASE_FOLDER & CStr(cat) & "\"
+        Set newLabel = Frame1.Controls.Add("Forms.Label.1", "lbl" & CStr(cat), True)
+        With newLabel
+            .Caption = CStr(cat)
+            .Left = 6
+            .Top = NextCategoryTop()
+            .Width = 288
+            .Height = 18
+        End With
+        Set newListBox = Frame1.Controls.Add("Forms.ListBox.1", "lst" & CStr(cat), True)
+        With newListBox
+            .Left = 6
+            .Top = newLabel.Top + newLabel.Height + 6
+            .Width = 285.75
+            .Height = 80.35
+            .Tag = newFolderPath
+        End With
+        PopulateListBox newListBox, newFolderPath
+        colCategoryListBoxes.Add newListBox
+    Next cat
+
+    SyncCategoryRegistry userCats     ' keep the saved list in step with disk
+    RefreshFrameScroll                ' size the scroll region to the content (#4)
+    Frame1.ScrollTop = 0              ' start at the top (#1)
+End Sub
+
+' ============================================================================
+' IMPORT / USE
+' ============================================================================
+Private Sub CommandButton1_Click()
+    Dim selectedFile As String
+    Dim fullPath As String
+    Dim categoryFolder As String
+    Dim lb As MSForms.ListBox
+    Dim found As Boolean
+    found = False
+
+    ' Loop over all category list boxes to see which one has a selection.
+    For Each lb In colCategoryListBoxes
+        If lb.ListIndex <> -1 Then
+            selectedFile = lb.List(lb.ListIndex)
+            categoryFolder = lb.Tag        ' Folder path stored in Tag
+            found = True
+            Exit For
+        End If
+    Next lb
+
+    If Not found Then
+        MsgBox "Please select a file from one of the lists.", vbExclamation
+        Exit Sub
+    End If
+
+    fullPath = categoryFolder & selectedFile
+    ImportSlides fullPath
+End Sub
+
+' ============================================================================
+' ADD A GRAPHIC (from the current selection) INTO A CATEGORY
+' ============================================================================
+Private Sub cmdAddSelection_Click()
+    Dim sel As Selection
+    Dim newPres As presentation
+    Dim newSlide As slide
+    Dim pastedShapes As ShapeRange
+    Dim categoryInput As String
+    Dim categoryName As String
+    Dim categoryPath As String
+    Dim graphicName As String
+    Dim filePath As String
+    Dim colCategories As Collection
+    Dim idx As Long
+
+    On Error Resume Next
+    Set sel = ActiveWindow.Selection
+    On Error GoTo 0
+    If sel Is Nothing Then
+        MsgBox "No active selection found. Please select an object first.", vbExclamation
+        Exit Sub
+    End If
+
+    If sel.Type <> ppSelectionShapes Then
+        MsgBox "Please select one or more shapes.", vbExclamation
+        Exit Sub
+    End If
+
+    Set colCategories = GetAvailableCategories()
+
+    categoryInput = InputBox("Enter the category to add the graphic to:" & vbCrLf & _
+                              ListAvailableCategories(), "Select Category")
+    If Trim(categoryInput) = "" Then Exit Sub
+
+    If IsNumeric(categoryInput) Then
+        idx = CLng(categoryInput)
+        If idx < 0 Or idx >= colCategories.count Then
+            MsgBox "Invalid numeric selection.", vbExclamation
+            Exit Sub
+        End If
+        categoryName = colCategories(idx + 1)
+    Else
+        categoryName = categoryInput
+    End If
+
+    If LCase(categoryName) = "general" Then
+        categoryPath = BASE_FOLDER
+    Else
+        categoryPath = BASE_FOLDER & categoryName & "\"
+        If Dir(categoryPath, vbDirectory) = "" Then
+            If MsgBox("Category '" & categoryName & "' does not exist. Create it?", vbYesNo + vbExclamation) = vbYes Then
+                On Error GoTo ErrHandler
+                MkDir categoryPath
+            Else
+                Exit Sub
+            End If
+        End If
+    End If
+
+    graphicName = InputBox("Enter a name for the graphic (without extension):", "Graphic Name")
+    If Trim(graphicName) = "" Then Exit Sub
+
+    Set newPres = Application.Presentations.Add(msoTrue)
+    If newPres.Slides.count = 0 Then
+        Set newSlide = newPres.Slides.Add(1, ppLayoutBlank)
+    Else
+        Set newSlide = newPres.Slides(1)
+    End If
+
+    If Not ActivePresentation Is Nothing Then
+        With newPres.PageSetup
+            .slideWidth = ActivePresentation.PageSetup.slideWidth
+            .slideHeight = ActivePresentation.PageSetup.slideHeight
+        End With
+    End If
+
+    sel.ShapeRange.Copy
+    Set pastedShapes = newSlide.Shapes.Paste
+
+    filePath = categoryPath & graphicName & ".pptx"
+
+    On Error GoTo ErrHandler
+    newPres.SaveAs filePath
+    newPres.Close
+
+    RepopulateCategory categoryName          ' show the new graphic without reopening
+    MsgBox "Graphic added successfully as '" & graphicName & ".pptx' in category '" & categoryName & "'.", vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error: " & Err.Description, vbCritical
+End Sub
+
+' ============================================================================
+' ADD / REMOVE CATEGORY
+' ============================================================================
+Private Sub cmdAddCategory_Click()
+    Dim newCategoryName As String
+    Dim newFolderPath As String
+    Dim newListBox As MSForms.ListBox
+    Dim newLabel As MSForms.Label
+
+    newCategoryName = Trim$(InputBox("Enter the new category name:", "Add Category"))
+    If newCategoryName = "" Then Exit Sub
+
+    ' don't let a new category collide with a built-in
+    If IsBuiltInCategory(newCategoryName) Then
+        MsgBox "'" & newCategoryName & "' is a built-in category name. Choose a different name.", vbExclamation
+        Exit Sub
+    End If
+    ' block characters that can't be a folder name
+    If newCategoryName Like "*[\/:*?""<>|]*" Then
+        MsgBox "A category name can't contain \ / : * ? "" < > |", vbExclamation
+        Exit Sub
+    End If
+
+    newFolderPath = BASE_FOLDER & newCategoryName & "\"
+    On Error GoTo ErrHandler          ' stay live across MkDir AND the control-add calls below
+
+    If Dir(newFolderPath, vbDirectory) = "" Then
+        MkDir newFolderPath
+    Else
+        ' folder already there (e.g. imported): if it's already shown, just say so
+        If ControlExists("lst" & newCategoryName) Or ControlExists("lbl" & newCategoryName) Then
+            MsgBox "That category is already shown.", vbInformation
+            Exit Sub
+        End If
+    End If
+
+    Set newLabel = Frame1.Controls.Add("Forms.Label.1", "lbl" & newCategoryName, True)
+    With newLabel
+        .Caption = newCategoryName
+        .Left = 6
+        .Top = NextCategoryTop()
+        .Width = 288
+        .Height = 18
+    End With
+
+    Set newListBox = Frame1.Controls.Add("Forms.ListBox.1", "lst" & newCategoryName, True)
+    With newListBox
+        .Left = 6
+        .Top = newLabel.Top + newLabel.Height + 6
+        .Width = 285.75
+        .Height = 80.35
+        .Tag = newFolderPath
+    End With
+
+    PopulateListBox newListBox, newFolderPath
+    colCategoryListBoxes.Add newListBox
+
+    SyncCategoryRegistry GetUserCategories()
+    RefreshFrameScroll
+    Frame1.ScrollTop = newLabel.Top      ' reveal the new category
+
+    MsgBox "New category '" & newCategoryName & "' added.", vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error adding category: " & Err.Description, vbCritical
+End Sub
+
+' Remove a USER category only (built-ins are protected). Deletes its folder +
+' graphics after an explicit confirmation, then removes controls and reflows.
+Private Sub cmdRemoveCategory_Click()
+    Dim userCats As Collection, i As Long, disp As String
+    Dim pick As String, idx As Long, catName As String, folderPath As String
+    Dim fileCount As Long, fName As String
+
+    Set userCats = GetUserCategories()
+    If userCats.count = 0 Then
+        MsgBox "There are no user-added categories to remove." & vbCrLf & _
+               "The built-in categories (General, Circle of Care, Calendar Days, " & _
+               "Highlights) can't be removed.", vbInformation
+        Exit Sub
+    End If
+
+    disp = ""
+    For i = 1 To userCats.count
+        disp = disp & (i - 1) & ": " & userCats(i) & vbCrLf
+    Next i
+
+    pick = InputBox("Enter the number of the user category to REMOVE:" & vbCrLf & vbCrLf & disp, _
+                    "Remove Category")
+    If Trim$(pick) = "" Then Exit Sub
+    If Not IsNumeric(pick) Then
+        MsgBox "Please enter a number.", vbExclamation
+        Exit Sub
+    End If
+    idx = CLng(pick)
+    If idx < 0 Or idx >= userCats.count Then
+        MsgBox "Invalid selection.", vbExclamation
+        Exit Sub
+    End If
+    catName = CStr(userCats(idx + 1))
+
+    If IsBuiltInCategory(catName) Then          ' belt and suspenders
+        MsgBox "'" & catName & "' is a built-in category and can't be removed.", vbExclamation
+        Exit Sub
+    End If
+
+    folderPath = BASE_FOLDER & catName & "\"
+
+    fileCount = 0
+    fName = Dir(folderPath & "*.pptx")
+    Do While fName <> ""
+        fileCount = fileCount + 1
+        fName = Dir
+    Loop
+
+    If MsgBox("Remove the category '" & catName & "'" & _
+              IIf(fileCount > 0, " and delete its " & fileCount & " graphic(s)", "") & "?" & vbCrLf & _
+              "This cannot be undone.", vbYesNo + vbExclamation, "Remove Category") <> vbYes Then Exit Sub
+
+    ' collect filenames FIRST (deleting during a live Dir() enumeration is unreliable)
+    Dim delFiles As Collection, vf As Variant, failed As Long, bareFolder As String
+    Set delFiles = New Collection
+    fName = Dir(folderPath & "*")
+    Do While fName <> ""
+        delFiles.Add fName
+        fName = Dir
+    Loop
+
+    ' delete each file; a locked/open graphic must NOT leave a half-removed category
+    failed = 0
+    For Each vf In delFiles
+        On Error Resume Next
+        Kill folderPath & CStr(vf)
+        If Err.Number <> 0 Then failed = failed + 1
+        Err.Clear
+        On Error GoTo 0
+    Next vf
+
+    bareFolder = Left$(folderPath, Len(folderPath) - 1)     ' RmDir wants no trailing backslash
+    If failed = 0 Then
+        On Error Resume Next
+        RmDir bareFolder
+        On Error GoTo 0
+    End If
+
+    ' only tear down the category if the folder is actually gone
+    If failed > 0 Or Dir(bareFolder, vbDirectory) <> "" Then
+        RepopulateCategory catName        ' show what WAS deleted; keep the category
+        RefreshFrameScroll
+        MsgBox "'" & catName & "' could not be fully removed" & _
+               IIf(failed > 0, " (" & failed & " graphic(s) may be open in PowerPoint)", "") & "." & vbCrLf & _
+               "Close any open graphics from this category and try again.", vbExclamation, "Remove Category"
+        Exit Sub
+    End If
+
+    RemoveCategoryControls catName
+    SyncCategoryRegistry GetUserCategories()
+    RefreshFrameScroll
+    Frame1.ScrollTop = 0
+
+    MsgBox "Category '" & catName & "' removed.", vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error removing category: " & Err.Description, vbCritical
+End Sub
+
+' ============================================================================
+' REMOVE A GRAPHIC (unchanged)
+' ============================================================================
+Private Sub RemoveGraphic_Click()
+    Dim categoryInput As String
+    Dim categoryName As String
+    Dim colCategories As Collection
+    Dim idx As Long
+    Dim fileFolder As String
+    Dim fileList As New Collection
+    Dim fName As String
+    Dim fileDisplay As String
+    Dim fileIndexInput As String
+    Dim numericIndex As Long
+    Dim i As Long
+    Dim selectedFile As String
+
+    Set colCategories = GetAvailableCategories()
+
+    categoryInput = InputBox("Enter the category from which to remove a graphic:" & vbCrLf & _
+                             "Available categories:" & vbCrLf & ListAvailableCategories(), "Select Category")
+    If Trim(categoryInput) = "" Then Exit Sub
+
+    If IsNumeric(categoryInput) Then
+        idx = CLng(categoryInput)
+        If idx < 0 Or idx >= colCategories.count Then
+            MsgBox "Invalid numeric selection.", vbExclamation
+            Exit Sub
+        End If
+        categoryName = colCategories(idx + 1)
+    Else
+        categoryName = categoryInput
+    End If
+
+    If LCase(categoryName) = "general" Then
+        fileFolder = BASE_FOLDER
+    Else
+        fileFolder = BASE_FOLDER & categoryName & "\"
+    End If
+
+    fName = Dir(fileFolder & "*.pptx")
+    Do While fName <> ""
+        fileList.Add fName
+        fName = Dir
+    Loop
+
+    If fileList.count = 0 Then
+        MsgBox "No graphics found in category '" & categoryName & "'.", vbExclamation
+        Exit Sub
+    End If
+
+    fileDisplay = ""
+    For i = 1 To fileList.count
+        fileDisplay = fileDisplay & (i - 1) & ": " & fileList(i) & vbCrLf
+    Next i
+
+    fileIndexInput = InputBox("Enter the number corresponding to the graphic you want to remove:" & vbCrLf & vbCrLf & fileDisplay, "Remove Graphic")
+    If Trim(fileIndexInput) = "" Then Exit Sub
+
+    If Not IsNumeric(fileIndexInput) Then
+        MsgBox "Please enter a valid numeric selection.", vbExclamation
+        Exit Sub
+    End If
+
+    numericIndex = CLng(fileIndexInput)
+    If numericIndex < 0 Or numericIndex >= fileList.count Then
+        MsgBox "Invalid selection.", vbExclamation
+        Exit Sub
+    End If
+
+    selectedFile = fileList(numericIndex + 1)
+
+    If MsgBox("Are you sure you want to delete '" & selectedFile & "' from category '" & categoryName & "'?", vbYesNo + vbExclamation) = vbYes Then
+        On Error GoTo ErrHandler
+        Kill fileFolder & selectedFile
+        RepopulateCategory categoryName      ' drop the deleted graphic from the list
+        MsgBox "Graphic '" & selectedFile & "' has been removed.", vbInformation
+    End If
+
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error deleting file: " & Err.Description, vbCritical
+End Sub
+
+' ============================================================================
+' LIST SELECTION (mutual-exclusion on the built-in lists) + CLOSE
+' ============================================================================
+Private Sub ListBox1_Click()
+    ListBox2.ListIndex = -1
+    ListBox3.ListIndex = -1
+    ListBox4.ListIndex = -1
+End Sub
+
+Private Sub ListBox2_Click()
+    ListBox1.ListIndex = -1
+    ListBox3.ListIndex = -1
+    ListBox4.ListIndex = -1
+End Sub
+
+Private Sub ListBox3_Click()
+    ListBox1.ListIndex = -1
+    ListBox2.ListIndex = -1
+    ListBox4.ListIndex = -1
+End Sub
+
+Private Sub ListBox4_Click()
+    ListBox1.ListIndex = -1
+    ListBox2.ListIndex = -1
+    ListBox3.ListIndex = -1
+End Sub
+
+Private Sub cmdClose_Click()
+    CloseAndRestore
+End Sub
+
+Private Sub CloseButton_Click()
+    CloseAndRestore
+End Sub
+
+Private Sub CloseAndRestore()
+    Dim currentSlideIndex As Long
+    If Not Application.ActiveWindow Is Nothing Then
+        If Not Application.ActiveWindow.View.slide Is Nothing Then
+            currentSlideIndex = Application.ActiveWindow.View.slide.SlideIndex
+        End If
+    End If
+    Unload Me
+    ToggleFullScreen currentSlideIndex
+End Sub
+
+' ============================================================================
+' HELPERS
+' ============================================================================
+Public Sub PopulateListBox(ByRef lstBox As MSForms.ListBox, ByVal folderPath As String)
+    Dim fileName As String
+    lstBox.Clear
+    fileName = Dir(folderPath & "*.pptx")
+    Do While fileName <> ""
+        lstBox.AddItem fileName
+        fileName = Dir
+    Loop
+End Sub
+
+' Find the displayed listbox for a category by its folder-path Tag (built-in
+' ListBox1..4 and dynamic lists alike all carry their folder in .Tag).
+Private Function ListBoxForCategory(ByVal catName As String) As MSForms.ListBox
+    Dim folderPath As String, lb As MSForms.ListBox
+    If LCase$(Trim$(catName)) = "general" Then
+        folderPath = BASE_FOLDER
+    Else
+        folderPath = BASE_FOLDER & catName & "\"
+    End If
+    For Each lb In colCategoryListBoxes
+        If StrComp(CStr(lb.Tag), folderPath, vbTextCompare) = 0 Then
+            Set ListBoxForCategory = lb
+            Exit Function
+        End If
+    Next lb
+End Function
+
+' Refresh a displayed category's listbox from disk (after a graphic add/remove).
+Private Sub RepopulateCategory(ByVal catName As String)
+    Dim lb As MSForms.ListBox
+    Set lb = ListBoxForCategory(catName)
+    If Not lb Is Nothing Then PopulateListBox lb, CStr(lb.Tag)
+End Sub
+
+Private Sub EnsureBaseFolder()
+    On Error Resume Next
+    If Dir(BASE_FOLDER, vbDirectory) = "" Then MkDir BASE_FOLDER
+    On Error GoTo 0
+End Sub
+
+' The four fixed categories that must never be removed.
+Private Function IsBuiltInCategory(ByVal nm As String) As Boolean
+    Select Case LCase$(Trim$(nm))
+        Case "general", "circle of care", "calendar days", "highlights"
+            IsBuiltInCategory = True
+    End Select
+End Function
+
+Private Function ControlExists(ByVal ctlName As String) As Boolean
+    Dim c As control
+    On Error Resume Next
+    Set c = Frame1.Controls(ctlName)
+    On Error GoTo 0
+    ControlExists = Not (c Is Nothing)
+End Function
+
+' User categories = QuickGraphics subfolders that aren't built-ins, in saved-registry
+' order first (to preserve the user's ordering), then any imported disk folders
+' (alphabetical). Disk is the source of truth, so imports always show.
+Private Function GetUserCategories() As Collection
+    Dim result As New Collection, onDisk As Object
+    Dim folderName As String, savedCats As String, arr() As String, i As Long, nm As String
+    Set onDisk = CreateObject("Scripting.Dictionary")
+    onDisk.CompareMode = vbTextCompare
+
+    folderName = Dir(BASE_FOLDER, vbDirectory)
+    Do While folderName <> ""
+        If folderName <> "." And folderName <> ".." Then
+            If (GetAttr(BASE_FOLDER & folderName) And vbDirectory) = vbDirectory Then
+                If Not IsBuiltInCategory(folderName) Then
+                    If Not onDisk.Exists(folderName) Then onDisk(folderName) = True
+                End If
+            End If
+        End If
+        folderName = Dir
+    Loop
+
+    ' registry order first (only those still present on disk)
+    savedCats = LoadCategoriesString()
+    arr = Split(savedCats, "|")
+    For i = LBound(arr) To UBound(arr)
+        nm = Trim$(arr(i))
+        If nm <> "" And Not IsBuiltInCategory(nm) Then
+            If onDisk.Exists(nm) Then
+                result.Add nm
+                onDisk.Remove nm
+            End If
+        End If
+    Next i
+
+    ' then any disk-only folders (alphabetical) not already listed
+    Dim names() As String, k As Variant, n As Long, a As Long, b As Long, t As String
+    n = onDisk.count
+    If n > 0 Then
+        ReDim names(0 To n - 1)
+        i = 0
+        For Each k In onDisk.Keys
+            names(i) = CStr(k)
+            i = i + 1
+        Next k
+        For a = 0 To n - 2
+            For b = a + 1 To n - 1
+                If StrComp(names(a), names(b), vbTextCompare) > 0 Then
+                    t = names(a): names(a) = names(b): names(b) = t
+                End If
+            Next b
+        Next a
+        For a = 0 To n - 1
+            result.Add names(a)
+        Next a
+    End If
+
+    Set GetUserCategories = result
+End Function
+
+' Bottom of the lowest label/listbox in Frame1 + a gap = where the next block goes.
+Private Function NextCategoryTop() As Single
+    Dim ctrl As control, maxBottom As Single
+    maxBottom = 0
+    For Each ctrl In Frame1.Controls
+        If TypeName(ctrl) = "ListBox" Or TypeName(ctrl) = "Label" Then
+            If ctrl.Top + ctrl.Height > maxBottom Then maxBottom = ctrl.Top + ctrl.Height
+        End If
+    Next ctrl
+    NextCategoryTop = maxBottom + 10
+End Function
+
+' Bottom of the built-in block (the four fixed listboxes).
+Private Function BuiltInBottom() As Single
+    Dim nm As Variant, lb As control, mx As Single
+    mx = 0
+    For Each nm In Array("ListBox1", "ListBox2", "ListBox3", "ListBox4")
+        Set lb = Nothing
+        On Error Resume Next
+        Set lb = Frame1.Controls(CStr(nm))
+        On Error GoTo 0
+        If Not lb Is Nothing Then
+            If lb.Top + lb.Height > mx Then mx = lb.Top + lb.Height
+        End If
+    Next nm
+    BuiltInBottom = mx
+End Function
+
+' Size Frame1's vertical scroll region to fit all its content (#4). The scrollbar
+' appears only when the content is taller than the frame.
+Private Sub RefreshFrameScroll()
+    Dim ctrl As control, maxBottom As Single
+    maxBottom = 0
+    For Each ctrl In Frame1.Controls
+        If ctrl.Top + ctrl.Height > maxBottom Then maxBottom = ctrl.Top + ctrl.Height
+    Next ctrl
+    Frame1.ScrollBars = fmScrollBarsVertical
+    Frame1.ScrollHeight = maxBottom + 12
+End Sub
+
+' Remove the runtime-added Label + ListBox for a category, drop it from the
+' collection, and re-stack the remaining dynamic blocks so there's no gap.
+Private Sub RemoveCategoryControls(ByVal catName As String)
+    Dim lb As MSForms.ListBox, newColl As Collection, itm As Variant
+    Dim lstName As String, lblName As String
+    lstName = "lst" & catName
+    lblName = "lbl" & catName
+
+    Set newColl = New Collection
+    For Each itm In colCategoryListBoxes
+        Set lb = itm
+        If StrComp(lb.name, lstName, vbTextCompare) <> 0 Then newColl.Add lb
+    Next itm
+    Set colCategoryListBoxes = newColl
+
+    On Error Resume Next
+    Frame1.Controls.Remove lstName
+    Frame1.Controls.Remove lblName
+    On Error GoTo 0
+
+    ReflowCategories
+End Sub
+
+' Re-stack the dynamic category blocks (collection items 5+) directly under the
+' built-in area, removing any gap left by a removal.
+Private Sub ReflowCategories()
+    Dim i As Long, lb As MSForms.ListBox, lbl As control, cat As String, cursorY As Single
+    cursorY = BuiltInBottom() + 10
+    For i = 5 To colCategoryListBoxes.count
+        Set lb = colCategoryListBoxes(i)
+        cat = Mid$(lb.name, 4)               ' strip the "lst" prefix
+        Set lbl = Nothing
+        On Error Resume Next
+        Set lbl = Frame1.Controls("lbl" & cat)
+        On Error GoTo 0
+        If Not lbl Is Nothing Then
+            lbl.Top = cursorY
+            lb.Top = lbl.Top + lbl.Height + 6
+        Else
+            lb.Top = cursorY
+        End If
+        cursorY = lb.Top + lb.Height + 10
+    Next i
+End Sub
+
+' Available categories (General + every QuickGraphics subfolder), for the
+' add/remove-graphic prompts.
+Private Function GetAvailableCategories() As Collection
+    Dim col As New Collection
+    Dim folderName As String
+    Dim path As String
+
+    col.Add "General"
+
+    path = BASE_FOLDER
+    folderName = Dir(path, vbDirectory)
+    Do While folderName <> ""
+        If (GetAttr(path & folderName) And vbDirectory) = vbDirectory Then
+            If folderName <> "." And folderName <> ".." Then
+                col.Add folderName
+            End If
+        End If
+        folderName = Dir
+    Loop
+
+    Set GetAvailableCategories = col
+End Function
+
+Private Function ListAvailableCategories() As String
+    Dim col As Collection, i As Long, s As String
+    Set col = GetAvailableCategories()
+    s = ""
+    For i = 1 To col.count
+        s = s & (i - 1) & ": " & col(i) & vbCrLf
+    Next i
+    ListAvailableCategories = s
+End Function
+
+' --- registry-backed category list (secondary to the folders on disk) --------
+Private Sub SyncCategoryRegistry(ByVal userCats As Collection)
+    Dim s As String, cat As Variant
+    s = "General|Circle of Care|Calendar Days|Highlights"
+    For Each cat In userCats
+        s = s & "|" & CStr(cat)
+    Next cat
+    SaveCategories s
+End Sub
+
+Private Sub SaveCategories(ByVal catList As String)
+    SaveSetting APP_NAME, CATEGORY_SECTION, CATEGORY_KEY, catList
+End Sub
+
+Private Function LoadCategoriesString() As String
+    LoadCategoriesString = GetSetting(APP_NAME, CATEGORY_SECTION, CATEGORY_KEY, _
+                                      "General|Circle of Care|Calendar Days|Highlights")
+End Function
