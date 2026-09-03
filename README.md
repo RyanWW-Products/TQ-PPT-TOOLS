@@ -10,32 +10,6 @@ read-only token to pull updates.
 
 ---
 
-## How distribution works
-
-```
-   you (build machine)                    GitHub (private repo)            client machine
-   ───────────────────                    ─────────────────────            ──────────────
-   edit macros in .pptm                                                    PowerPoint loads
-   Save As .ppam                          dist/TrialQuest.ppam   ◄── push     TrialQuest.ppam
-   build.ps1 (injects ribbon) ──────────► version.json                     from %APPDATA%\...
-   make-manifest.ps1 ───────────────────► manifest.json                          │
-   commit + push                          assets/Trial Ex Addin/…                 │
-                                                   ▲                              │
-   installer.iss (Inno) ─── ships ─┐               └──── Check for Updates ◄──────┘
-                                   └─► installs .ppam, registers it,
-                                       downloads assets from the repo
-```
-
-* **`version.json`** declares the latest `addinVersion` and `assetsVersion`.
-* **`manifest.json`** lists every template asset and its byte size.
-* The **Update button** (`Updater.bas`) and the **installer** both download from the
-  GitHub *contents* API using a read-only token, so the repo can be private.
-* Template assets are overwritten in place. The `.ppam` is locked while PowerPoint
-  runs, so the new copy is staged and a tiny PowerShell **swapper** installs it after
-  PowerPoint closes, then relaunches PowerPoint.
-
----
-
 ## Repo layout
 
 | Path | Purpose |
