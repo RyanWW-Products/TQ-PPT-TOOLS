@@ -1,5 +1,5 @@
 ﻿{
-    "addinVersion":  "5.6.5",
+    "addinVersion":  "5.6.6",
     "assetsVersion":  2,
-    "notes":  "Timeline: fixes hourly import so blank times and time ranges do not become midnight; preserves seconds and both range endpoints, with ranges positioned at their start. Hour bars cover the occupied hours and end at the following hour boundary without an extra empty cell or false gap. Untimed rows keep spreadsheet order and have no leader on mixed timelines; date-only timelines connect to the center of each day. Layout measures scaled text and packs lanes to fit, including range labels and visible Bates numbers. New Toggle Bates Numbers adds a right-aligned, italic gray citation below the entry text at 60% of the main font size. Formatting tools preserve that citation, and saved timeline data preserves original capitalization. The Copilot prompt now anchors times-only sources to 01/01/2099 and advances dates for overnight or multi-day sequences."
+    "notes":  "Restores strictly vertical timeline leader lines and the original lane-center positioning, Date Snap, and drawing order. Removes the diagonal leaders introduced in 5.6.5. Retains the requested hour-boundary fixes, untimed-entry rules, time-range support, Bates toggle, and 01/01/2099 Copilot prompt. Date-only timelines keep vertical leaders at the center of the day."
 }

@@ -689,41 +689,9 @@ Private Function DrawPage(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n As 
     For ci = 1 To pn
         drawn = drawn + DrawColumn(sld, ev, n, pageCols(ci), colLArr(ci), colWArr(ci), bandBottom, sc, doWipe, animSeq, lanes(ci), t)
     Next ci
-    StackTimelineEntries sld
 
     DrawPage = drawn
 End Function
-
-' Upper cards must cover the leaders descending to lower cards, including cards
-' in other lanes. Column-by-column stacking can put those lines over entry text.
-Private Sub StackTimelineEntries(ByVal sld As slide)
-    Dim entries() As Shape, tops() As Single, count As Long, shp As Shape
-    Dim topY As Single, leftX As Single, botY As Single, rightX As Single
-    For Each shp In sld.Shapes
-        If ShapeTagVal(shp, "TLENTRY") = "1" Then
-            count = count + 1
-            ReDim Preserve entries(1 To count)
-            ReDim Preserve tops(1 To count)
-            Set entries(count) = shp
-            BoxRectOf shp, topY, leftX, botY, rightX
-            tops(count) = topY
-        End If
-    Next shp
-    Dim i As Long, j As Long, deepest As Long, swapTop As Single
-    For i = 1 To count
-        deepest = i
-        For j = i + 1 To count
-            If tops(j) > tops(deepest) Then deepest = j
-        Next j
-        If deepest <> i Then
-            Set shp = entries(i)
-            Set entries(i) = entries(deepest)
-            Set entries(deepest) = shp
-            swapTop = tops(i): tops(i) = tops(deepest): tops(deepest) = swapTop
-        End If
-        entries(i).ZOrder msoBringToFront
-    Next i
-End Sub
 
 ' The columns (unit dates) for page p.
 Private Sub PageColumns(ByVal p As Long, ByVal colsPerSlide As Long, ByVal nCols As Long, _
@@ -781,6 +749,9 @@ Private Sub ComputePageLayout(ByVal sld As slide, ByVal pn As Long, ByRef pageCo
         lanes(ci) = 1
         effH = PackedColHeight(ev, n, pageCols(ci), cnt(ci), 1, sc)
         maxLanes = LanesFor(colWArr(ci), sc)
+        ' A date-only timeline has one shared day-center leader position.
+        ' Keep its cards in one stack so those leaders stay vertical and attached.
+        If Not EventsHaveTimes(ev, n) Then maxLanes = 1
         If maxLanes > cnt(ci) Then maxLanes = cnt(ci)
         For lc = 2 To maxLanes
             If effH <= availH Then Exit For
@@ -994,7 +965,7 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
             End If
         Next i
     Else
-        ' --- multi-lane packing (column-major by date); leaders retain their exact date X ---
+        ' --- multi-lane packing (column-major by date), with vertical leaders at lane centers ---
         For i = 1 To n
             If ev(i).UnitStart = colUnit Then nc = nc + 1
         Next i
@@ -1010,10 +981,9 @@ Private Function DrawColumn(ByVal sld As slide, ByRef ev() As TLEvent, ByVal n A
                 If laneIdx > lanes - 1 Then laneIdx = lanes - 1
                 laneCenter = innerL + (laneIdx + 0.5) * laneW
                 boxLeft = laneCenter - boxW / 2
-                dateX = innerL + ClampD(ev(i).UnitFrac, 0, 1) * (innerR - innerL)
                 showLeader = ev(i).HasTime Or Not anyTimes
                 Set grp = CreateTimelineEntry(sld, ev(i).DateLabel, ev(i).Desc, boxLeft, laneY(laneIdx), boxW, _
-                                              dateX, bandBottom, True, sc, boxesH, ev(i).RawDate, t, "", showLeader, ev(i).HasTime)
+                                              laneCenter, bandBottom, True, sc, boxesH, ev(i).RawDate, t, "", showLeader, ev(i).HasTime)
                 grp.Tags.Add "TLENTRY", "1"
                 grp.Tags.Add "TLFullDate", CStr(CDbl(ev(i).RawDate))   ' label may omit the year; keep the real date for Date Snap
                 SetTimelineEntryBates grp, ev(i).Bates, TimelineBatesAreVisible(sld)
@@ -2309,14 +2279,14 @@ Private Sub DateSnapCore(ByVal groupMove As Boolean)
                 If ln Is Nothing Then
                     missed = missed + 1
                 ElseIf groupMove Then
-                    shp.Left = shp.Left + (targetX - LeaderBarX(ln))
+                    shp.Left = shp.Left + (targetX - ln.Left)
                     snapped = snapped + 1
                 Else
                     BoxRectOf shp, topY, leftX, botY, rgtX     ' Line Nudge: clamp to the box bounds
                     cx = targetX
                     If cx < leftX Then cx = leftX
                     If cx > rgtX Then cx = rgtX
-                    SetLeaderBarX ln, cx
+                    ln.Left = cx
                     snapped = snapped + 1
                     If cx <> targetX Then
                         shortLabels.Add Format$(d, "mmm d, yyyy")
@@ -2356,8 +2326,8 @@ NextSnapEntry:
                 Set ln = LeadingLineOf(shp)
                 If Not ln Is Nothing Then
                     BoxRectOf shp, topY, leftX, botY, rgtX
-                    SetLeaderBarX ln, (leftX + rgtX) / 2
-                    shp.Left = shp.Left + (shortTargets(k) - LeaderBarX(ln))
+                    ln.Left = (leftX + rgtX) / 2                 ' recenter the leader...
+                    shp.Left = shp.Left + (shortTargets(k) - ln.Left)   ' ...then group-move to the date
                     gm = gm + 1
                 End If
             Next k
@@ -2473,7 +2443,7 @@ Private Sub ReflowTimeline(ByVal sld As slide, ByVal bar As Shape, ByVal t As St
                 If innerW < 0 Then innerW = 0
                 targetX = innerL + frac * innerW
                 Set ln = LeadingLineOf(shp)
-                If Not ln Is Nothing Then shp.Left = shp.Left + (targetX - LeaderBarX(ln))
+                If Not ln Is Nothing Then shp.Left = shp.Left + (targetX - ln.Left)
             End If
         End If
 NextReflowEntry:
@@ -2521,23 +2491,6 @@ Private Function LeadingLineOf(ByVal entryGroup As Shape) As Shape
         End If
     Next it
 End Function
-
-' A packed card can sit beside its actual time. Its leader runs from the exact
-' bar date to the card edge; Left alone is not the bar endpoint of a diagonal.
-Private Function LeaderBarX(ByVal ln As Shape) As Single
-    LeaderBarX = ln.Left
-    If (ln.HorizontalFlip = msoTrue) Xor (ln.VerticalFlip = msoTrue) Then LeaderBarX = ln.Left + ln.Width
-End Function
-
-Private Sub SetLeaderBarX(ByVal ln As Shape, ByVal x As Single)
-    Dim bottomX As Single, topAtRight As Boolean, wantRight As Boolean
-    topAtRight = (ln.HorizontalFlip = msoTrue) Xor (ln.VerticalFlip = msoTrue)
-    If topAtRight Then bottomX = ln.Left Else bottomX = ln.Left + ln.Width
-    wantRight = (x > bottomX)
-    ln.Width = Abs(x - bottomX)
-    If x < bottomX Then ln.Left = x Else ln.Left = bottomX
-    If topAtRight <> wantRight Then ln.Flip msoFlipHorizontal
-End Sub
 
 ' The entry's navy date box / white entry box: the GroupStyle tag first, else a heuristic -
 ' entries are built date-box ABOVE entry-box, so the topmost / lowest text child stands in

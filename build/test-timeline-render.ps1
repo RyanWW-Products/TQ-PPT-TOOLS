@@ -82,23 +82,6 @@ Private Sub TQTestEntryBounds(ByVal sld As slide, ByVal caseName As String, ByVa
     TQTestCheck fh, allInside, caseName & " keeps every entry inside slide " & sld.SlideIndex, checks, failures
 End Sub
 
-Private Sub TQTestEntryStack(ByVal sld As slide, ByVal caseName As String, ByVal fh As Integer, _
-                            ByRef checks As Long, ByRef failures As Long)
-    Dim entries As New Collection, upper As Shape, lower As Shape, upperBox As Shape, lowerBox As Shape, correct As Boolean
-    correct = True
-    CollectEntryGroups sld.Shapes, entries
-    For Each upper In entries
-        Set upperBox = DateBoxOf(upper)
-        For Each lower In entries
-            Set lowerBox = DateBoxOf(lower)
-            If upperBox.Top < lowerBox.Top - 0.2 Then
-                If upper.ZOrderPosition < lower.ZOrderPosition Then correct = False
-            End If
-        Next lower
-    Next upper
-    TQTestCheck fh, correct, caseName & " upper cards cover deeper leaders across lanes", checks, failures
-End Sub
-
 Private Sub TQTestBarRectangles(ByVal bar As Shape, ByVal caseName As String, ByVal fh As Integer, _
                                ByRef checks As Long, ByRef failures As Long, ByRef cells As Long)
     Dim child As Shape, isRectangle As Boolean
@@ -117,29 +100,34 @@ Private Sub TQTestBarRectangles(ByVal bar As Shape, ByVal caseName As String, By
 End Sub
 
 Private Sub TQTestLeaderGeometry(ByVal sld As slide, ByVal caseName As String, ByVal fh As Integer, _
-                                 ByRef checks As Long, ByRef failures As Long)
+                                 ByRef checks As Long, ByRef failures As Long, Optional ByVal exactDates As Boolean = False)
     Dim entries As New Collection, entry As Shape, ln As Shape, db As Shape, bar As Shape
     Dim lefts As Object, widths As Object, d As Date, key As String, t As String
-    Dim expectedX As Single, bottomX As Single, anchorsOK As Boolean, contactsOK As Boolean, count As Long
+    Dim expectedX As Single, anchorsOK As Boolean, contactsOK As Boolean, verticalOK As Boolean, count As Long
     Set bar = FindDateBar(sld)
     If bar Is Nothing Then Exit Sub
     t = BarUnit(sld, bar)
     Set lefts = CreateObject("Scripting.Dictionary"): Set widths = CreateObject("Scripting.Dictionary")
     CollectBandCells bar, lefts, widths
-    anchorsOK = True: contactsOK = True
+    anchorsOK = True: contactsOK = True: verticalOK = True
     CollectEntryGroups sld.Shapes, entries
     For Each entry In entries
         Set ln = LeadingLineOf(entry)
         If Not ln Is Nothing Then
             count = count + 1
+            If Abs(ln.Width) > 0.01 Then
+                verticalOK = False
+                Print #fh, "VERTICAL | " & caseName & " | " & entry.Name & " | width=" & ln.Width
+            End If
+            If exactDates Then
             If StoredEntryDate(entry, d) Then
                 If ShapeTagVal(entry, "TLTimeKnown") = "0" And t <> "Hours" Then d = Int(CDbl(d)) + 0.5
                 key = DateKeyOf(UnitStartOf(d, t))
                 If lefts.Exists(key) Then
                     expectedX = CSng(lefts(key)) + COL_PAD + UnitFracOf(d, t) * (CSng(widths(key)) - 2 * COL_PAD)
-                    If Abs(LeaderBarX(ln) - expectedX) > 0.2 Then
+                    If Abs(ln.Left - expectedX) > 0.2 Then
                         anchorsOK = False
-                        Print #fh, "ANCHOR | " & caseName & " | " & entry.Name & " | expected=" & expectedX & " | actual=" & LeaderBarX(ln)
+                        Print #fh, "ANCHOR | " & caseName & " | " & entry.Name & " | expected=" & expectedX & " | actual=" & ln.Left
                     End If
                 Else
                     anchorsOK = False
@@ -147,20 +135,21 @@ Private Sub TQTestLeaderGeometry(ByVal sld As slide, ByVal caseName As String, B
             Else
                 anchorsOK = False
             End If
+            End If
             Set db = DateBoxOf(entry)
             If db Is Nothing Then
                 contactsOK = False
             Else
-                bottomX = 2 * ln.Left + ln.Width - LeaderBarX(ln)
-                If bottomX < db.Left - 0.2 Or bottomX > db.Left + db.Width + 0.2 Or _
+                If ln.Left < db.Left - 0.2 Or ln.Left > db.Left + db.Width + 0.2 Or _
                    Abs(ln.Top + ln.Height - db.Top - db.Height) > 0.2 Then
                     contactsOK = False
-                    Print #fh, "CONTACT | " & caseName & " | " & entry.Name & " | bottomX=" & bottomX & " | boxLeft=" & db.Left & " | boxRight=" & db.Left + db.Width
+                    Print #fh, "CONTACT | " & caseName & " | " & entry.Name & " | lineX=" & ln.Left & " | boxLeft=" & db.Left & " | boxRight=" & db.Left + db.Width
                 End If
             End If
         End If
     Next entry
-    TQTestCheck fh, count > 0 And anchorsOK, caseName & " leaders meet exact time positions on the bar", checks, failures
+    TQTestCheck fh, count > 0 And verticalOK, caseName & " every leader is exactly vertical", checks, failures
+    If exactDates Then TQTestCheck fh, count > 0 And anchorsOK, caseName & " leaders meet exact time positions on the bar", checks, failures
     TQTestCheck fh, count > 0 And contactsOK, caseName & " leader bottoms meet their date boxes", checks, failures
 End Sub
 
@@ -233,15 +222,14 @@ Private Sub TQTestImportRender(ByVal path As String, ByVal caseName As String, B
     TQTestBarRectangles bar, caseName, fh, checks, failures, barCells
     TQTestCheck fh, barCells = 2, caseName & " has two rectangular hour cells", checks, failures
     TQTestEntryBounds sld, caseName, fh, checks, failures
-    TQTestEntryStack sld, caseName, fh, checks, failures
     TQTestLeaderGeometry sld, caseName & " initial", fh, checks, failures
+    sld.Export outputDir & "\" & caseName & ".png", "PNG", 1600, 900
     For Each entry In entries
         Set ln = LeadingLineOf(entry)
         If Not ln Is Nothing Then entry.Left = entry.Left + 7
     Next entry
     ReflowTimeline sld, bar, "Hours"
-    TQTestLeaderGeometry sld, caseName & " reflow", fh, checks, failures
-    TQTestEntryBounds sld, caseName & " reflow", fh, checks, failures
+    TQTestLeaderGeometry sld, caseName & " reflow", fh, checks, failures, True
     TQTestCheck fh, LoadTimelineState(sld, restored, restoredN, t, color, gaps, multi, wipe, weighted), _
                 caseName & " reloads saved state", checks, failures
     same = (restoredN = n)
@@ -266,7 +254,7 @@ Private Sub TQTestImportRender(ByVal path As String, ByVal caseName As String, B
     TQTestCheck fh, batesSame, caseName & " roundtrip preserves exact Bates text and case", checks, failures
     TQTestCheck fh, labelsSame, caseName & " roundtrip preserves exact date labels", checks, failures
     TQTestCheck fh, StrComp(t, "Hours", vbBinaryCompare) = 0, caseName & " reloads canonical Hours unit", checks, failures
-    sld.Export outputDir & "\" & caseName & ".png", "PNG", 1600, 900
+    sld.Export outputDir & "\" & caseName & "-reflow.png", "PNG", 1600, 900
 End Sub
 
 Private Sub TQTestPagedRender(ByVal path As String, ByVal caseName As String, ByVal expectedCount As Long, _
@@ -305,7 +293,7 @@ Private Sub TQTestPagedRender(ByVal path As String, ByVal caseName As String, By
             Next label
             TQTestBarRectangles bar, caseName, fh, checks, failures, totalCells
             TQTestEntryBounds sld, caseName, fh, checks, failures
-            TQTestEntryStack sld, caseName, fh, checks, failures
+            TQTestLeaderGeometry sld, caseName & " page " & pages, fh, checks, failures
             sld.Export outputDir & "\" & caseName & "-" & pages & ".png", "PNG", 1600, 900
         End If
     Next sld
@@ -343,9 +331,10 @@ Private Sub TQTestDateOnly(ByVal outputDir As String, ByVal fh As Integer, ByRef
             d = CDate(CDbl(ShapeTagVal(entry, "TLFullDate")))
             key = DateKeyOf(UnitStartOf(d, "Days"))
             targetX = CSng(lefts(key)) + CSng(widths(key)) / 2
-            TQTestCheck fh, Abs(LeaderBarX(ln) - targetX) < 0.2, "date-only leader lands at day center", checks, failures
+            TQTestCheck fh, Abs(ln.Left - targetX) < 0.2, "date-only leader lands at day center", checks, failures
         End If
     Next entry
+    TQTestLeaderGeometry sld, "date-only initial", fh, checks, failures, True
     ReflowTimeline sld, bar, "Days"
     For Each entry In entries
         Set ln = LeadingLineOf(entry)
@@ -353,46 +342,120 @@ Private Sub TQTestDateOnly(ByVal outputDir As String, ByVal fh As Integer, ByRef
             d = CDate(CDbl(ShapeTagVal(entry, "TLFullDate")))
             key = DateKeyOf(UnitStartOf(d, "Days"))
             targetX = CSng(lefts(key)) + CSng(widths(key)) / 2
-            TQTestCheck fh, Abs(LeaderBarX(ln) - targetX) < 0.2, "date-only reflow keeps leader centered", checks, failures
+            TQTestCheck fh, Abs(ln.Left - targetX) < 0.2, "date-only reflow keeps leader centered", checks, failures
         End If
     Next entry
+    TQTestLeaderGeometry sld, "date-only reflow", fh, checks, failures, True
     sld.Export outputDir & "\date-only.png", "PNG", 1600, 900
 End Sub
 
 Private Sub TQTestLeaderEdits(ByVal outputDir As String, ByVal fh As Integer, ByRef checks As Long, ByRef failures As Long)
-    Dim sld As slide, ln As Shape, i As Long, j As Long, targets As Variant, bottomX As Single, topY As Single, height As Single
-    Set sld = TQTestNewSlide("leader-orientations")
-    targets = Array(620!, 120!, 400!, 550!, 100!)
-    For i = 1 To 2
-        If i = 1 Then Set ln = sld.Shapes.AddLine(100, 70, 400, 250) Else Set ln = sld.Shapes.AddLine(700, 70, 400, 250)
-        topY = ln.Top: height = ln.Height
-        For j = LBound(targets) To UBound(targets)
-            SetLeaderBarX ln, CSng(targets(j))
-            bottomX = 2 * ln.Left + ln.Width - LeaderBarX(ln)
-            TQTestCheck fh, Abs(LeaderBarX(ln) - CSng(targets(j))) < 0.2, "leader nudge changes exact bar endpoint in both orientations", checks, failures
-            TQTestCheck fh, Abs(bottomX - 400) < 0.2, "leader nudge preserves bottom endpoint while crossing orientation", checks, failures
-            TQTestCheck fh, Abs(ln.Top - topY) < 0.2 And Abs(ln.Height - height) < 0.2, "leader nudge preserves vertical span", checks, failures
-        Next j
-        ln.Delete
-    Next i
+    Dim sld As slide, ln As Shape, aBox As Shape, bBox As Shape, aLeft As Single, bLeft As Single, untimedLeft As Single
+    Set sld = TQTestNewSlide("leader-edits")
     Dim cols(1 To 1) As Date, widths(1 To 1) As Single, lefts(1 To 1) As Single
-    Dim a As Shape, b As Shape, h As Single, d As Date, bar As Shape
+    Dim a As Shape, b As Shape, untimed As Shape, h As Single, d As Date, bar As Shape, targetA As Single, targetB As Single
     cols(1) = DateSerial(2099, 1, 1) + TimeSerial(22, 0, 0): widths(1) = 960
     DrawBar sld, cols, 1, widths, lefts, 1, "Hours", "Gray"
     d = DateSerial(2099, 1, 1) + TimeSerial(22, 10, 0)
-    Set a = CreateTimelineEntry(sld, "Jan 1 10:10 PM", "Left bar endpoint to a card on its right", 600, 140, 180, _
-                                COL_PAD + UnitFracOf(d, "Hours") * (960 - 2 * COL_PAD), BAND_TOP + BAND_HEIGHT, True, 1, h, d, "Hours", "", True, True)
+    targetA = COL_PAD + UnitFracOf(d, "Hours") * (960 - 2 * COL_PAD)
+    Set a = CreateTimelineEntry(sld, "Jan 1 10:10 PM", "Line nudge stays within this card", 100, 140, 180, _
+                                190, BAND_TOP + BAND_HEIGHT, True, 1, h, d, "Hours", "", True, True)
     a.Tags.Add "TLENTRY", "1": a.Tags.Add "TLFullDate", CStr(CDbl(d))
     d = DateSerial(2099, 1, 1) + TimeSerial(22, 50, 0)
-    Set b = CreateTimelineEntry(sld, "Jan 1 10:50 PM", "Right bar endpoint to a card on its left", 100, 320, 180, _
-                                COL_PAD + UnitFracOf(d, "Hours") * (960 - 2 * COL_PAD), BAND_TOP + BAND_HEIGHT, True, 1, h, d, "Hours", "", True, True)
+    targetB = COL_PAD + UnitFracOf(d, "Hours") * (960 - 2 * COL_PAD)
+    Set b = CreateTimelineEntry(sld, "Jan 1 10:50 PM", "Line nudge clamps at this card edge", 600, 280, 180, _
+                                690, BAND_TOP + BAND_HEIGHT, True, 1, h, d, "Hours", "", True, True)
     b.Tags.Add "TLENTRY", "1": b.Tags.Add "TLFullDate", CStr(CDbl(d))
-    TQTestLeaderGeometry sld, "both orientations initial", fh, checks, failures
+    Set untimed = CreateTimelineEntry(sld, "Jan 1", "Untimed entry stays in place", 400, 410, 180, _
+                                      490, BAND_TOP + BAND_HEIGHT, True, 1, h, DateSerial(2099, 1, 1), "Hours", "", False, False)
+    untimed.Tags.Add "TLENTRY", "1": untimed.Tags.Add "TLFullDate", CStr(CDbl(DateSerial(2099, 1, 1)))
+    untimedLeft = untimed.Left
+    Set aBox = DateBoxOf(a): Set bBox = DateBoxOf(b)
+    aLeft = aBox.Left: bLeft = bBox.Left
+    TQTestLeaderGeometry sld, "leader edit initial", fh, checks, failures
+    ' The test-only fixture sends DateSnapCore to this slide and answers its prompts.
+    sld.Tags.Add "TQTestPromptAnswer", "NO"
+    DateSnapCore False
+    Set ln = LeadingLineOf(a)
+    TQTestCheck fh, Abs(ln.Left - targetA) < 0.2, "line nudge reaches a date within card bounds", checks, failures
+    Set ln = LeadingLineOf(b)
+    TQTestCheck fh, Abs(ln.Left - bBox.Left - bBox.Width) < 0.2, "line nudge clamps at card edge when group move declined", checks, failures
+    TQTestCheck fh, Abs(aBox.Left - aLeft) < 0.2 And Abs(bBox.Left - bLeft) < 0.2, "line nudge leaves both cards in place", checks, failures
+    TQTestLeaderGeometry sld, "line nudge clamped", fh, checks, failures
+    sld.Tags.Add "TQTestPromptAnswer", "YES"
+    DateSnapCore False
+    TQTestCheck fh, bBox.Left > bLeft + 1, "line nudge optional group move shifts the unreachable card", checks, failures
+    TQTestLeaderGeometry sld, "line nudge group-move fallback", fh, checks, failures, True
+    a.Left = a.Left + 15: b.Left = b.Left - 15
+    DateSnapCore True
+    TQTestLeaderGeometry sld, "Date Snap group move", fh, checks, failures, True
     a.Left = a.Left + 15: b.Left = b.Left - 15
     Set bar = FindDateBar(sld)
     ReflowTimeline sld, bar, "Hours"
-    TQTestLeaderGeometry sld, "both orientations reflow", fh, checks, failures
-    sld.Export outputDir & "\leader-orientations.png", "PNG", 1600, 900
+    TQTestLeaderGeometry sld, "leader edit reflow", fh, checks, failures, True
+    TQTestCheck fh, Abs(untimed.Left - untimedLeft) < 0.2, "Date Snap and reflow leave untimed entries in place", checks, failures
+    Set ln = LeadingLineOf(untimed)
+    TQTestCheck fh, ln Is Nothing, "Date Snap and reflow do not add untimed leaders", checks, failures
+    sld.Export outputDir & "\leader-edits.png", "PNG", 1600, 900
+End Sub
+
+Private Function TQTestMessageBox(ByVal prompt As String, Optional ByVal buttons As VbMsgBoxStyle = vbOKOnly, _
+                                  Optional ByVal title As String = "") As VbMsgBoxResult
+    If (buttons And vbYesNo) = vbYesNo Then
+        If TQTestTargetPresentation().Slides("leader-edits").Tags("TQTestPromptAnswer") = "YES" Then
+            TQTestMessageBox = vbYes
+        Else
+            TQTestMessageBox = vbNo
+        End If
+    Else
+        TQTestMessageBox = vbOK
+    End If
+End Function
+
+Private Sub TQTestColumnLeaders(ByVal outputDir As String, ByVal fh As Integer, ByRef checks As Long, ByRef failures As Long)
+    Dim ev(1 To 6) As TLEvent, i As Long, mode As Long, laneCount As Long, sld As slide, entry As Shape, ln As Shape, db As Shape
+    Dim cols(1 To 1) As Date, widths(1 To 1) As Single, lefts(1 To 1) As Single, entries As Collection
+    Dim count As Long, animSeq As Long, expectedX As Single, entryDate As Date, eventIndex As Long
+    cols(1) = DateSerial(2099, 1, 1) + TimeSerial(22, 0, 0): widths(1) = 960
+    For i = 1 To 6
+        ev(i).RawDate = cols(1) + TimeSerial(0, 5 + (i - 1) * 10, 0)
+        ev(i).DateLabel = Format$(ev(i).RawDate, "mmm d h:nn AM/PM")
+        ev(i).Desc = "Entry " & i
+        ev(i).Prec = 4: ev(i).HasTime = True: ev(i).OrigIndex = i
+    Next i
+    PrepareEventPositions ev, 6
+    PrepareEventUnits ev, 6, "Hours"
+    For mode = 1 To 2
+        If mode = 1 Then laneCount = 1 Else laneCount = 3
+        Set sld = TQTestNewSlide("column-leaders-" & laneCount)
+        DrawBar sld, cols, 1, widths, lefts, 1, "Hours", "Gray"
+        count = DrawColumn(sld, ev, 6, cols(1), 0, 960, BAND_TOP + BAND_HEIGHT, 0.7, False, animSeq, laneCount, "Hours")
+        TQTestCheck fh, count = 6, laneCount & "-lane column renders all six entries", checks, failures
+        Set entries = New Collection
+        CollectEntryGroups sld.Shapes, entries
+        For Each entry In entries
+            Set ln = LeadingLineOf(entry): Set db = DateBoxOf(entry)
+            If Not ln Is Nothing And Not db Is Nothing Then
+                If StoredEntryDate(entry, entryDate) Then
+                    eventIndex = DateDiff("n", cols(1), entryDate)
+                    eventIndex = (eventIndex - 5) \ 10
+                    If laneCount = 1 Then
+                        expectedX = COL_PAD + UnitFracOf(entryDate, "Hours") * (960 - 2 * COL_PAD)
+                    Else
+                        expectedX = COL_PAD + (eventIndex \ 2 + 0.5) * ((960 - 2 * COL_PAD) / 3)
+                        TQTestCheck fh, Abs(ln.Left - db.Left - db.Width / 2) < 0.2, "multi-lane leader remains centered within its card", checks, failures
+                    End If
+                    TQTestCheck fh, Abs(ln.Left - expectedX) < 0.2, laneCount & "-lane column retains its original horizontal anchor", checks, failures
+                Else
+                    TQTestCheck fh, False, "column leader has a stored date", checks, failures
+                End If
+            Else
+                TQTestCheck fh, False, "column entry has a leader and date box", checks, failures
+            End If
+        Next entry
+        TQTestLeaderGeometry sld, laneCount & "-lane column", fh, checks, failures, (laneCount = 1)
+        sld.Export outputDir & "\column-leaders-" & laneCount & ".png", "PNG", 1600, 900
+    Next mode
 End Sub
 
 Private Sub TQTestBatesRebuild(ByVal path As String, ByVal outputDir As String, ByVal fh As Integer, _
@@ -409,6 +472,7 @@ Private Sub TQTestBatesRebuild(ByVal path As String, ByVal outputDir As String, 
     TQTestCheck fh, RenderTimeline(sld, ev, n, "Hours", "Gray", False, False, False, False, summary), _
                 "Bates-visible timeline renders with measured footers", checks, failures
     TQTestEntryBounds sld, "Bates-visible initial", fh, checks, failures
+    TQTestLeaderGeometry sld, "Bates-visible initial", fh, checks, failures
     TQTestCheck fh, LoadTimelineState(sld, restored, rn, t, color, gaps, multi, wipe, weighted), _
                 "Bates-visible timeline reloads state", checks, failures
     TQTestCheck fh, RenderTimeline(sld, restored, rn, t, color, gaps, multi, wipe, weighted, summary), _
@@ -422,7 +486,6 @@ Private Sub TQTestBatesRebuild(ByVal path As String, ByVal outputDir As String, 
     TQTestCheck fh, entries.Count = n, "Bates-visible rebuild keeps every entry", checks, failures
     TQTestCheck fh, shown = expected And expected > 0, "Bates-visible rebuild restores every supplied footer", checks, failures
     TQTestEntryBounds sld, "Bates-visible rebuild", fh, checks, failures
-    TQTestEntryStack sld, "Bates-visible rebuild", fh, checks, failures
     TQTestLeaderGeometry sld, "Bates-visible rebuild", fh, checks, failures
     sld.Export outputDir & "\bates-visible-rebuild.png", "PNG", 1600, 900
 End Sub
@@ -483,6 +546,7 @@ Public Sub TQTimelineRenderRegression(ByVal correctedPath As String, ByVal origi
     TQTestPagedRender correctedPath, "corrected-paged", 30, 0, outputDir, fh, checks, failures
     TQTestPagedRender originalPath, "original-paged", 37, 7, outputDir, fh, checks, failures
     TQTestDateOnly outputDir, fh, checks, failures
+    TQTestColumnLeaders outputDir, fh, checks, failures
     TQTestLeaderEdits outputDir, fh, checks, failures
     TQTestBates outputDir, fh, checks, failures
     TQTestBatesRebuild correctedPath, outputDir, fh, checks, failures
@@ -605,6 +669,13 @@ try {
     $timelineCode = $components.Item('TimelineCreator').CodeModule
     $productionText = $timelineCode.Lines(1, $timelineCode.CountOfLines)
     $fixtureText = [regex]::Replace($productionText, '(?<![\w.])ActivePresentation\b', 'TQTestTargetPresentation()')
+    # Run the real Date Snap logic against an isolated fixture with scripted dialog answers.
+    # These substitutions exist only in the temporary regression presentation.
+    $snapMatch = [regex]::Match($fixtureText, '(?ms)^Private Sub DateSnapCore\(.*?^End Sub')
+    if (-not $snapMatch.Success) { throw 'Cannot locate DateSnapCore for isolated regression coverage.' }
+    $snapFixture = $snapMatch.Value.Replace('Set sld = ActiveTargetSlide()', 'Set sld = TQTestTargetPresentation().Slides("leader-edits")')
+    $snapFixture = [regex]::Replace($snapFixture, '\bMsgBox\b', 'TQTestMessageBox')
+    $fixtureText = $fixtureText.Substring(0, $snapMatch.Index) + $snapFixture + $fixtureText.Substring($snapMatch.Index + $snapMatch.Length)
     $timelineCode.DeleteLines(1, $timelineCode.CountOfLines)
     $timelineCode.AddFromString($fixtureText + "`r`n" + $testCode)
     $correctedLiteral = $CorrectedWorkbook.Replace('"', '""')

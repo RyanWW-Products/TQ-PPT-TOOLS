@@ -156,13 +156,10 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         Exit Function
     End If
 
-    Dim lx As Single, lty As Single, boxAnchorX As Single
+    Dim lx As Single, lty As Single
     If lineX < 0 Then lx = oBoxGroup.Left + oBoxGroup.Width / 2 Else lx = lineX
     If lineTopY < 0 Then lty = oBoxGroup.Top - 50 Else lty = lineTopY
-    boxAnchorX = lx
-    If boxAnchorX < oDateBox.Left Then boxAnchorX = oDateBox.Left
-    If boxAnchorX > oDateBox.Left + oDateBox.Width Then boxAnchorX = oDateBox.Left + oDateBox.Width
-    Set oLine = oSlide.Shapes.AddLine(lx, lty, boxAnchorX, oDateBox.Top + oDateBox.Height)
+    Set oLine = oSlide.Shapes.AddLine(lx, lty, lx, oDateBox.Top + oDateBox.Height)
     oLine.Tags.Add "TLLeader", "1"
     oLine.Name = "LeadingLine" & Format$(lineCounter, "00")
     With oLine.line
