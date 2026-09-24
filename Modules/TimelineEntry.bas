@@ -67,7 +67,8 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         ByVal lineX As Single, ByVal lineTopY As Single, ByVal fixedWidth As Boolean, _
         ByVal fontScale As Single, ByRef boxesHeight As Single, _
         ByVal entryDate As Date, ByVal unitType As String, _
-        Optional ByVal nameOverride As String = "") As Shape
+        Optional ByVal nameOverride As String = "", Optional ByVal showLeader As Boolean = True, _
+        Optional ByVal hasTime As Boolean = False) As Shape
     Static lineCounter As Long
     Dim oDateBox As Shape, oEntryBox As Shape, oBoxGroup As Shape, oLine As Shape, entryGroup As Shape
     Dim suffix As String
@@ -86,6 +87,7 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         .line.ForeColor.RGB = RGB(0, 0, 0)
         With .TextFrame
             .MarginTop = 3: .MarginBottom = 3
+            .MarginLeft = 4: .MarginRight = 4
             If fixedWidth Then .WordWrap = msoTrue
             With .TextRange
                 .text = dateText
@@ -122,6 +124,7 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         .line.ForeColor.RGB = RGB(0, 0, 0)
         With .TextFrame
             .MarginTop = 3: .MarginBottom = 3
+            .MarginLeft = 4: .MarginRight = 4
             If fixedWidth Then .WordWrap = msoTrue
             With .TextRange
                 .text = descText
@@ -144,10 +147,23 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
         .IncrementOffsetY 3
     End With
 
-    Dim lx As Single, lty As Single
+    If Not showLeader Then
+        Set entryGroup = oBoxGroup
+        RenameEntryParts entryGroup, suffix
+        entryGroup.Tags.Add "TLNoLeader", "1"
+        entryGroup.Tags.Add "TLTimeKnown", "0"
+        Set CreateTimelineEntry = entryGroup
+        Exit Function
+    End If
+
+    Dim lx As Single, lty As Single, boxAnchorX As Single
     If lineX < 0 Then lx = oBoxGroup.Left + oBoxGroup.Width / 2 Else lx = lineX
     If lineTopY < 0 Then lty = oBoxGroup.Top - 50 Else lty = lineTopY
-    Set oLine = oSlide.Shapes.AddLine(lx, lty, lx, oDateBox.Top + oDateBox.Height)
+    boxAnchorX = lx
+    If boxAnchorX < oDateBox.Left Then boxAnchorX = oDateBox.Left
+    If boxAnchorX > oDateBox.Left + oDateBox.Width Then boxAnchorX = oDateBox.Left + oDateBox.Width
+    Set oLine = oSlide.Shapes.AddLine(lx, lty, boxAnchorX, oDateBox.Top + oDateBox.Height)
+    oLine.Tags.Add "TLLeader", "1"
     oLine.Name = "LeadingLine" & Format$(lineCounter, "00")
     With oLine.line
         .Weight = 1.5
@@ -163,6 +179,7 @@ Public Function CreateTimelineEntry(ByVal oSlide As slide, ByVal dateText As Str
     ' the names used to group.
     Set entryGroup = oSlide.Shapes.range(Array(oBoxGroup.Name, oLine.Name)).Group
     RenameEntryParts entryGroup, suffix
+    entryGroup.Tags.Add "TLTimeKnown", IIf(hasTime, "1", "0")
     Set CreateTimelineEntry = entryGroup
 End Function
 
@@ -183,9 +200,9 @@ Private Sub RenameEntryParts(ByVal entryGroup As Shape, ByVal suffix As String)
             shp.name = "BoxGroup " & suffix
         ElseIf shp.name Like "LeadingLine*" Then
             shp.name = "LeadingLine " & suffix
-        ElseIf ShapeTag(shp, "GroupStyle") = "Date Box" Then
+        ElseIf StrComp(ShapeTag(shp, "GroupStyle"), "Date Box", vbTextCompare) = 0 Then
             shp.name = "DateBox " & suffix
-        ElseIf ShapeTag(shp, "GroupStyle") = "Entry Box" Then
+        ElseIf StrComp(ShapeTag(shp, "GroupStyle"), "Entry Box", vbTextCompare) = 0 Then
             shp.name = "Entry Box " & suffix
         End If
     Next shp

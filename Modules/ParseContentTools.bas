@@ -52,7 +52,7 @@ Public Sub ParseContent(control As IRibbonControl)
     Dim title As String, body As Collection
     For i = 1 To boxes.count
         Set shp = boxes(i)
-        raw = shp.TextFrame.TextRange.text
+        raw = TimelineEntryBodyText(shp)
         If HasQuote(raw) Then
             AlignByLines shp                 ' leave the words alone, just fix alignment
             skippedQuote = skippedQuote + 1
@@ -275,6 +275,10 @@ Private Sub ApplyParsed(ByVal entryBox As Shape, ByVal title As String, ByVal bo
         full = full & IIf(i = 1, "", vbCr) & paras(i)
     Next i
 
+    Dim showBates As Boolean
+    showBates = TimelineEntryBatesVisible(entryBox)
+    ApplyTimelineEntryBates entryBox, False
+
     Dim tr As Object
     Set tr = entryBox.TextFrame.TextRange
     tr.text = full
@@ -295,20 +299,23 @@ Private Sub ApplyParsed(ByVal entryBox As Shape, ByVal title As String, ByVal bo
     Next i
 
     AlignByLines entryBox
+    ApplyTimelineEntryBates entryBox, showBates
 End Sub
 
 ' 1-2 displayed (wrapped) lines -> center, 3+ -> left.
 Private Sub AlignByLines(ByVal entryBox As Shape)
-    Dim lc As Long
+    Dim lc As Long, showBates As Boolean
+    showBates = TimelineEntryBatesVisible(entryBox)
+    ApplyTimelineEntryBates entryBox, False
     On Error Resume Next
     lc = entryBox.TextFrame.TextRange.Lines.count
     On Error GoTo 0
-    If lc <= 0 Then Exit Sub
-    If lc <= 2 Then
+    If lc > 0 And lc <= 2 Then
         entryBox.TextFrame.TextRange.ParagraphFormat.Alignment = ppAlignCenter
-    Else
+    ElseIf lc > 2 Then
         entryBox.TextFrame.TextRange.ParagraphFormat.Alignment = ppAlignLeft
     End If
+    ApplyTimelineEntryBates entryBox, showBates
 End Sub
 
 ' ===========================================================================
@@ -344,7 +351,7 @@ Private Function BuildRewordPrompt(ByVal boxes As Collection) As String
         Set shp = boxes(i)
         shp.Tags.Add "PCID", CStr(i)     ' Tags.Add overwrites an existing tag of the same name
         sb = sb & "@" & i & vbCrLf
-        sb = sb & BasicGrammar(FlattenBreaks(shp.TextFrame.TextRange.text)) & vbCrLf
+        sb = sb & BasicGrammar(FlattenBreaks(TimelineEntryBodyText(shp))) & vbCrLf
     Next i
 
     BuildRewordPrompt = sb
@@ -425,7 +432,7 @@ End Sub
 
 Private Function IsEntryBoxShape(ByVal shp As Shape) As Boolean
     On Error Resume Next
-    If shp.Tags("GroupStyle") <> "Entry Box" Then Exit Function
+    If StrComp(shp.Tags("GroupStyle"), "Entry Box", vbTextCompare) <> 0 Then Exit Function
     If Not shp.HasTextFrame Then Exit Function
     If Not shp.TextFrame.HasText Then Exit Function
     IsEntryBoxShape = True

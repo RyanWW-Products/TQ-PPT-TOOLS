@@ -376,7 +376,7 @@ Private Function FindTaggedChild(ByVal shp As Shape, ByVal tagVal As String, ByV
     On Error Resume Next
     gs = shp.Tags("GroupStyle")
     On Error GoTo 0
-    If gs = tagVal Then Set FindTaggedChild = shp: Exit Function
+    If StrComp(gs, tagVal, vbTextCompare) = 0 Then Set FindTaggedChild = shp: Exit Function
     If maxDepth <= 0 Then Exit Function
     If shp.Type = msoGroup Then
         For Each it In shp.GroupItems
@@ -390,7 +390,7 @@ End Function
 Private Function FindTaggedDescendant(ByVal shp As Shape, ByVal tagVal As String) As Shape
     Dim it As Shape, found As Shape
     On Error Resume Next
-    If shp.Tags("GroupStyle") = tagVal Then Set FindTaggedDescendant = shp: Exit Function
+    If StrComp(shp.Tags("GroupStyle"), tagVal, vbTextCompare) = 0 Then Set FindTaggedDescendant = shp: Exit Function
     On Error GoTo 0
     If shp.Type = msoGroup Then
         For Each it In shp.GroupItems
@@ -426,11 +426,11 @@ End Function
 
 ' Body text (paragraphs 2..N) of a titled entry, flattened, for the UI list.
 Private Function BodyTextOf(ByVal eb As Shape) As String
-    Dim tr As Object, i As Long, s As String, ln As String
+    Dim paras() As String, i As Long, s As String, ln As String
     On Error Resume Next
-    Set tr = eb.TextFrame.TextRange
-    For i = 2 To tr.Paragraphs.count
-        ln = Trim$(Replace(tr.Paragraphs(i).text, vbCr, ""))
+    paras = Split(TimelineEntryBodyText(eb), vbCr)
+    For i = 1 To UBound(paras)
+        ln = Trim$(paras(i))
         If ln <> "" Then s = s & IIf(s = "", "", " / ") & ln
     Next i
     On Error GoTo 0
