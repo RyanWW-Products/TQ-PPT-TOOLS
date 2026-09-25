@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Imports the exported standard modules into a copy of the local master and
+    Imports the exported standard and class modules into a copy of the local master and
     saves a new PPTM and PPAM. Requires PowerPoint and trusted VBProject access.
 
 .DESCRIPTION
     The source master and presentations already open in PowerPoint are left
     alone. Existing forms, their resources, references, and document modules are
-    preserved. Tracked and new nonignored Modules/*.bas files are imported.
+    preserved. Tracked and new nonignored Modules/*.bas and Modules/*.cls files are imported.
 
     Macros are disabled while the private staging copy opens, and the original
     AutomationSecurity setting is restored immediately afterward. This script
@@ -41,6 +41,7 @@ $addinOutput = Join-Path $repoRoot ($releaseName + '.ppam')
 function Get-NormalizedModuleBody([string]$text) {
     # VBIDE hides exported Attribute records and may omit terminal empty lines.
     # Keep all other whitespace and letter case exact.
+    $text = [regex]::Replace($text, '(?s)\AVERSION 1\.0 CLASS\r?\nBEGIN\r?\n.*?\r?\nEND\r?\n', '')
     $text = [regex]::Replace($text, '(?m)^Attribute [^\r\n]*(?:\r?\n|$)', '')
     $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
     $text.TrimEnd([char[]]"`n")
@@ -85,8 +86,8 @@ if ([IO.Path]::GetExtension($SourcePptm) -ine '.pptm') { throw 'SourcePptm must 
 
 # Include a newly added module before its first commit, but never ignored files.
 # safe.directory is scoped to this read-only git invocation, not global config.
-$modulePaths = @(& git -c "safe.directory=$repoRoot" -C $repoRoot ls-files --cached --others --exclude-standard -- 'Modules/*.bas')
-if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate the repository standard modules.' }
+$modulePaths = @(& git -c "safe.directory=$repoRoot" -C $repoRoot ls-files --cached --others --exclude-standard -- 'Modules/*.bas' 'Modules/*.cls')
+if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate the repository VBA modules.' }
 $modulePaths = @($modulePaths | Sort-Object -Unique)
 if ($modulePaths.Count -eq 0) { throw 'No Modules/*.bas source files found.' }
 
@@ -99,9 +100,11 @@ foreach ($relativePath in $modulePaths) {
     if (-not $match.Success) { throw "Missing Attribute VB_Name in $relativePath" }
     $moduleName = $match.Groups[1].Value
     if ($moduleNames.ContainsKey($moduleName)) { throw "Duplicate module name: $moduleName" }
-    $moduleNames[$moduleName] = $true
+    $componentType = if ([IO.Path]::GetExtension($sourcePath) -eq '.cls') { 2 } else { 1 }
+    $moduleNames[$moduleName] = $componentType
     $sources += [pscustomobject]@{
         Name = $moduleName
+        Type = $componentType
         Path = $sourcePath
         Hash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
         Body = Get-NormalizedModuleBody $sourceText
@@ -146,8 +149,8 @@ try {
         $component = $components.Item($index)
         $componentName = [string]$component.Name
         $componentType = [int]$component.Type
-        if ($moduleNames.ContainsKey($componentName) -and $componentType -ne 1) {
-            throw "Exported standard module collides with a form/class/document component: $componentName"
+        if ($moduleNames.ContainsKey($componentName) -and $componentType -ne $moduleNames[$componentName]) {
+            throw "Exported module collides with a different component type: $componentName"
         }
         if ($componentType -eq 3) { $preservedForms += $componentName }
         if ($componentType -eq 1 -and -not $moduleNames.ContainsKey($componentName)) {
@@ -162,9 +165,16 @@ try {
             if ([string]$candidateComponent.Name -ieq $source.Name) { $existing = $candidateComponent; break }
         }
         if ($null -ne $existing) { $components.Remove($existing) }
-        $imported = $components.Import($source.Path)
-        if ($null -eq $imported -or [string]$imported.Name -ine $source.Name -or [int]$imported.Type -ne 1) {
-            throw "Standard module import did not retain the expected name and type: $($source.Name)"
+        if ($source.Type -eq 2) {
+            # PowerPoint VBIDE may import .cls files as standard modules. Create
+            # the class explicitly and insert only its executable source body.
+            $imported = $components.Add(2)
+            $imported.Name = $source.Name
+            $imported.CodeModule.AddFromString($source.Body)
+        }
+        else { $imported = $components.Import($source.Path) }
+        if ($null -eq $imported -or [string]$imported.Name -ine $source.Name -or [int]$imported.Type -ne $source.Type) {
+            throw "Module import did not retain the expected name and type: $($source.Name)"
         }
         if ($imported.CodeModule.CountOfLines -eq 0) { throw "Imported module has no code: $($source.Name)" }
         Write-Host ('Imported ' + $source.Name)
@@ -202,7 +212,7 @@ try {
             throw ("Imported source differs from {0} at normalized body line {1}. Release was not saved.`r`nSOURCE: {2}`r`nACTUAL: {3}" -f $source.Name, $firstDifferentLine, $expectedLine, $actualLine)
         }
     }
-    Write-Host ('Verified imported source for ' + $sources.Count + ' standard modules (VBIDE code recasing allowed; literals/comments/spacing exact).')
+    Write-Host ('Verified imported source for ' + $sources.Count + ' VBA modules (VBIDE code recasing allowed; literals/comments/spacing exact).')
 
     $presentation.Save() # The editable copy retains the original form resources.
     $presentation.SaveCopyAs($stagingAddin, 30) # ppSaveAsOpenXMLAddin

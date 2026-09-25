@@ -80,6 +80,10 @@ Public Sub Auto_Open()
     If RegGet(REG_AUTOCHK, "0") = "1" Then DoUpdateCheck False
 End Sub
 
+Public Sub Auto_Close()
+    EZHighlightsCancel
+End Sub
+
 ' ============================================================================
 ' CORE
 ' ============================================================================

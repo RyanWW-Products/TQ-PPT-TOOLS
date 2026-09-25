@@ -1,5 +1,5 @@
 ﻿{
-    "addinVersion":  "5.6.6",
+    "addinVersion":  "5.6.7",
     "assetsVersion":  2,
-    "notes":  "Restores strictly vertical timeline leader lines and the original lane-center positioning, Date Snap, and drawing order. Removes the diagonal leaders introduced in 5.6.5. Retains the requested hour-boundary fixes, untimed-entry rules, time-range support, Bates toggle, and 01/01/2099 Copilot prompt. Date-only timelines keep vertical leaders at the center of the day."
+    "notes":  "Adds EZ Highlights between Auto Callout and Shape Tools. Draw a rectangle or convert selected shapes to saturated yellow native ink highlights while retaining editable geometry, text and animations. Highlights are embedded for Windows PowerPoint and display without the add-in. Escape cancels drawing. Native ink has limitations in PDF/image export, printing and Mac/web rendering. Retains the 5.6.6 timeline behavior."
 }

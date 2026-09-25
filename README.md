@@ -10,11 +10,46 @@ read-only token to pull updates.
 
 ---
 
+## EZ Highlights
+
+The **EZ Highlights** button sits between Auto Callout and Shape Tools.
+With nothing selected, click it and drag a rectangle on the slide. With one or
+more shapes selected, click it to convert them. Press Escape to cancel drawing.
+
+Highlights use embedded Windows Ink with `#FFFF00`, zero transparency and the
+native `MaskPen` highlighter operation. Black text remains black beneath the
+highlight. Each result is a normal PowerPoint group containing native ink and
+an editable copy of the original shape with its fill and outline hidden. Shape
+geometry, text, tags, stacking position and animation effects are retained;
+animation click triggers are reassigned to the result. Clicking the button on
+an existing EZ Highlight leaves it unchanged.
+
+Conversion supports AutoShapes, freeforms and text boxes. Existing groups,
+pictures, charts, lines and shapes with 3-D effects are left unchanged with an
+explanation. Changing the editable child's geometry afterward does not redraw
+the ink; resize or rotate the complete group to keep them aligned.
+
+The saved `.pptx` displays its highlights in Windows desktop PowerPoint without
+this add-in or any linked assets. Native Ink has PowerPoint limitations: standard
+PDF/image export and printing can look faded, some animated transitions can show
+artifacts, and Mac/web rendering is not equivalent. See
+[Microsoft's ink pen documentation](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/mpc/pens-and-pen-options)
+and [DoneBy5's native-ink compatibility FAQ](https://doneby5.com/HP.html).
+
+Run `build/test-ez-highlights.ps1` for isolated conversion and save/reopen checks.
+Add `-MouseTest` to also draw with the mouse and test Escape cancellation in a
+disposable PowerPoint window. This optional test temporarily controls the mouse.
+Reports and preview files remain under the ignored `build/Output` directory.
+Use `-SourcePptm '<prepared master>.pptm'` to test the assembled release project
+in a disposable copy, rather than importing the loose feature modules.
+
+---
+
 ## Repo layout
 
 | Path | Purpose |
 |------|---------|
-| `Modules/*.bas`, `Forms/*` | VBA source (git-tracked exports of the live project) |
+| `Modules/*.bas`, `Modules/*.cls`, `Forms/*` | VBA source (git-tracked exports of the live project) |
 | `Modules/Updater.bas` | Update button + version check + authed download + swapper |
 | `ribbon/customUI.xml`, `ribbon/images/` | Ribbon definition + button icons (the build injects these) |
 | `assets/Trial Ex Addin/` | The ~36 MB runtime templates clients download |
