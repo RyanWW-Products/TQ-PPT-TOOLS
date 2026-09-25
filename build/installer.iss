@@ -14,7 +14,7 @@
 ; ============================================================================
 
 #define MyAppName    "Trial Quest PowerPoint Add-in"
-#define MyAppVersion "5.6.4"
+#define MyAppVersion "5.6.8"
 #define MyPublisher  "Trial Quest"
 #define MyAddinFile  "TrialQuest.ppam"
 #define GhOwner      "RyanWW-Products"
@@ -88,12 +88,14 @@ begin
     'Paste the read-only GitHub access token provided by your administrator. ' +
     'It is stored only on this machine and is used to download the template ' +
     'assets now and to fetch future updates from the "Check for Updates" button.');
-  TokenPage.Add('Access token:', False);
+  TokenPage.Add('Access token (leave blank to keep the saved token):', True);
 end;
 
 function GetTokenInput(Param: String): String;
 begin
   Result := Trim(TokenPage.Values[0]);
+  if Result = '' then
+    RegQueryStringValue(HKCU, 'Software\TrialQuest\Addin', 'GitHubToken', Result);
 end;
 
 { True if this Office version's PowerPoint is present. 16.0 also acts as the

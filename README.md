@@ -15,6 +15,10 @@ read-only token to pull updates.
 The **EZ Highlights** button sits between Auto Callout and Shape Tools.
 With nothing selected, click it and drag a rectangle on the slide. With one or
 more shapes selected, click it to convert them. Press Escape to cancel drawing.
+To highlight shapes inside a group, select the group and then click the desired
+child shape (Shift-click to select additional children), then click EZ Highlights.
+The containing group, nested layout and unselected neighbors are retained.
+For a grouped shape containing text, matching ink/text animations run together.
 
 Highlights use embedded Windows Ink with `#FFFF00`, zero transparency and the
 native `MaskPen` highlighter operation. Black text remains black beneath the
@@ -24,8 +28,8 @@ geometry, text, tags, stacking position and animation effects are retained;
 animation click triggers are reassigned to the result. Clicking the button on
 an existing EZ Highlight leaves it unchanged.
 
-Conversion supports AutoShapes, freeforms and text boxes. Existing groups,
-pictures, charts, lines and shapes with 3-D effects are left unchanged with an
+Conversion supports AutoShapes, freeforms and text boxes, including selected
+children inside groups. Whole groups, pictures, charts, lines and shapes with 3-D effects are left unchanged with an
 explanation. Changing the editable child's geometry afterward does not redraw
 the ink; resize or rotate the complete group to keep them aligned.
 
@@ -42,6 +46,11 @@ disposable PowerPoint window. This optional test temporarily controls the mouse.
 Reports and preview files remain under the ignored `build/Output` directory.
 Use `-SourcePptm '<prepared master>.pptm'` to test the assembled release project
 in a disposable copy, rather than importing the loose feature modules.
+
+The updater preserves the saved PAT and other settings when recording the new
+version. `build/test-updater-settings.ps1` reproduces the old registry-key reset
+and verifies preservation using disposable keys and a dummy token. Re-running
+the installer also keeps the saved token when its token field is left blank.
 
 ---
 

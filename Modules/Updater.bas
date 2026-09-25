@@ -232,7 +232,11 @@ Private Sub WriteSwapperScript(ByVal scriptPath As String, ByVal staged As Strin
     ts.WriteLine "  catch { Start-Sleep -Seconds 1 }"
     ts.WriteLine "}"
     ts.WriteLine "if ($copied) {"
-    ts.WriteLine "  New-Item -Path 'HKCU:\Software\TrialQuest\Addin' -Force | Out-Null"
+    ' New-Item -Force replaces an existing registry key, erasing the token,
+    ' channel and asset version. Create the key only when it does not exist.
+    ts.WriteLine "  if (-not (Test-Path -LiteralPath 'HKCU:\Software\TrialQuest\Addin')) {"
+    ts.WriteLine "    New-Item -Path 'HKCU:\Software\TrialQuest\Addin' -Force | Out-Null"
+    ts.WriteLine "  }"
     ts.WriteLine "  Set-ItemProperty -Path 'HKCU:\Software\TrialQuest\Addin' -Name 'InstalledVersion' -Value '" & newVersion & "'"
     ts.WriteLine "}"
     ts.WriteLine "Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue"

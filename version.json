@@ -1,5 +1,5 @@
 ﻿{
-    "addinVersion":  "5.6.7",
+    "addinVersion":  "5.6.8",
     "assetsVersion":  2,
-    "notes":  "Adds EZ Highlights between Auto Callout and Shape Tools. Draw a rectangle or convert selected shapes to saturated yellow native ink highlights while retaining editable geometry, text and animations. Highlights are embedded for Windows PowerPoint and display without the add-in. Escape cancels drawing. Native ink has limitations in PDF/image export, printing and Mac/web rendering. Retains the 5.6.6 timeline behavior."
+    "notes":  "EZ Highlights now supports selected shapes inside groups, including multiple children and nested, rotated or flipped groups. Preserves layout and synchronizes ink/text animations. Fixes the updater erasing the saved PAT, channel and other settings when recording an installed version. If an older updater already cleared the token, save it once after installing this version. Timeline behavior is unchanged."
 }

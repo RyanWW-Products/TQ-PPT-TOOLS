@@ -144,9 +144,15 @@ public static class EZMouseTest {
     $sec=$ppt.AutomationSecurity
     try {$ppt.AutomationSecurity=3;$deck=$ppt.Presentations.Open((Join-Path $outputDirectory 'PortableHighlights.pptx'),-1,0,0)}
     finally {$ppt.AutomationSecurity=$sec}
+    function Count-Highlights($shape){
+        if($shape.Tags.Item('EZHighlight') -eq '1'){return 1}
+        $count=0
+        if($shape.Type -eq 6){foreach($child in $shape.GroupItems){$count+=Count-Highlights $child}}
+        return $count
+    }
     $highlights=0
-    foreach($slide in $deck.Slides){foreach($shape in $slide.Shapes){if($shape.Tags.Item('EZHighlight') -eq '1'){$highlights++}}}
-    $expectedHighlights=9
+    foreach($slide in $deck.Slides){foreach($shape in $slide.Shapes){$highlights+=Count-Highlights $shape}}
+    $expectedHighlights=13
     if($MouseTest){$expectedHighlights++}
     if($highlights -ne $expectedHighlights){throw "Save/reopen did not retain all native highlights: $highlights"}
     Write-Output "PASS | macro-free save/reopen retained $highlights highlights"

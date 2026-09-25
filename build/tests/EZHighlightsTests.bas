@@ -10,10 +10,161 @@ Public Sub RunAll()
     For i = 1 To 9
         RunCase deck, i
     Next
+    RunGroupCase deck, False
+    RunGroupCase deck, True
+    RunMultiChildCase deck
 
     Print #report, "RESULT | checks=" & checks & " failures=" & failures
     Close #report
     deck.Save
+End Sub
+
+Private Sub RunMultiChildCase(ByVal deck As Presentation)
+    Dim sld As Slide, a As Shape, b As Shape, c As Shape, root As Shape, child As Shape
+    Dim window As DocumentWindow, effect As Effect, ink As Shape, editable As Shape
+    Dim originalId As Long, highlights As Long, originalShapeCount As Long
+    On Error GoTo failed
+    Set sld = deck.Slides.Add(deck.Slides.Count + 1, ppLayoutBlank)
+    Set a = sld.Shapes.AddShape(msoShapeRectangle, 80, 80, 120, 35)
+    Set b = sld.Shapes.AddShape(msoShapeOval, 240, 80, 100, 35)
+    Set c = sld.Shapes.AddShape(msoShapeRectangle, 400, 80, 70, 35)
+    c.Name = "untouched": c.Fill.ForeColor.RGB = vbGreen
+    Set root = sld.Shapes.Range(Array(a.Name, b.Name, c.Name)).Group
+    root.Name = "multiple selected children"
+    Set a = root.GroupItems(1): Set b = root.GroupItems(2)
+    a.Name = "same child name": b.Name = "same child name"
+    a.TextFrame.TextRange.Text = "Keep animated text"
+    Set effect = sld.TimeLine.MainSequence.AddEffect(a, msoAnimEffectWipe)
+    Set effect = sld.TimeLine.MainSequence.AddEffect(a, msoAnimEffectFade, , msoAnimTriggerAfterPrevious)
+    effect.Exit = msoTrue
+    Set effect = sld.TimeLine.MainSequence.AddEffect(b, msoAnimEffectFade, , msoAnimTriggerAfterPrevious)
+    If deck.Windows.Count = 0 Then Set window = deck.NewWindow Else Set window = deck.Windows(1)
+    window.Activate: window.ViewType = ppViewNormal: window.View.GotoSlide sld.SlideIndex
+    a.Select: b.Select msoFalse
+    Check window.Selection.HasChildShapeRange And window.Selection.ChildShapeRange.Count = 2, "multiple child selection"
+    EZHighlightsClick Nothing
+    Set root = sld.Shapes(1)
+    For Each child In root.GroupItems
+        If child.Tags("EZHighlight") = "1" Then highlights = highlights + 1: Set ink = child
+        If child.Tags("EZHighlightMember") = "1" Then Set editable = child
+    Next
+    Check highlights = 2, "two selected children converted despite duplicate names"
+    Check root.GroupItems("untouched").Fill.ForeColor.RGB = vbGreen, "multi-selection leaves unselected neighbor unchanged"
+    Check sld.Shapes.Count = 1, "multi-selection leaves one containing group"
+    Check sld.TimeLine.MainSequence.Count = 5, "multiple effects retain synchronized editable text"
+    Check sld.TimeLine.MainSequence(1).EffectType = msoAnimEffectWipe And sld.TimeLine.MainSequence(3).EffectType = msoAnimEffectFade, "multiple child animation order"
+    Check sld.TimeLine.MainSequence(3).Exit And sld.TimeLine.MainSequence(4).Exit, "ink and editable text retain exit effects"
+    originalId = root.Id: originalShapeCount = root.GroupItems.Count
+    ink.Select
+    EZHighlightsClick Nothing
+    Check sld.Shapes(1).Id = originalId And sld.Shapes(1).GroupItems.Count = originalShapeCount, "repeat click on grouped ink is unchanged"
+    Set root = sld.Shapes(1)
+    For Each child In root.GroupItems
+        If child.Tags("EZHighlightMember") = "1" Then Set editable = child
+    Next
+    window.Activate: window.View.GotoSlide sld.SlideIndex
+    editable.Select
+    EZHighlightsClick Nothing
+    Check sld.Shapes(1).Id = originalId And sld.Shapes(1).GroupItems.Count = originalShapeCount, "repeat click on retained editable child is unchanged"
+    Exit Sub
+failed:
+    Check False, "multiple child case runtime " & Err.Number & ": " & Err.Description
+End Sub
+
+Private Sub RunGroupCase(ByVal deck As Presentation, ByVal nested As Boolean)
+    Dim sld As Slide, a As Shape, b As Shape, inner As Shape, root As Shape, result As Shape
+    Dim c As Shape, effect As Effect, sequence As Sequence, window As DocumentWindow, ink As Shape, child As Shape
+    Dim rootId As Long, tag As String, originalLeft As Single, originalTop As Single
+    Dim originalWidth As Single, originalHeight As Single, originalRotation As Single
+    Dim bx As Single, by As Single, bw As Single, bh As Single, br As Single
+    On Error GoTo failed
+    tag = "group nested=" & nested
+    Set sld = deck.Slides.Add(deck.Slides.Count + 1, ppLayoutBlank)
+    Set a = sld.Shapes.AddShape(msoShapeChevron, 80, 100, 190, 60)
+    a.Name = "selected child": a.Tags.Add "ChildTag", "keep"
+    a.TextFrame.TextRange.Text = "Selected"
+    a.Fill.ForeColor.RGB = vbRed
+    Set b = sld.Shapes.AddShape(msoShapeOval, 300, 200, 80, 40)
+    b.Name = "neighbor": b.Fill.ForeColor.RGB = vbBlue
+    Set inner = sld.Shapes.Range(Array(a.Name, b.Name)).Group
+    inner.Name = "inner group"
+    Set root = inner
+    If nested Then
+        inner.Rotation = 23
+        inner.Flip msoFlipHorizontal
+        Set c = sld.Shapes.AddShape(msoShapeRectangle, 400, 300, 50, 40)
+        c.Name = "outer neighbor": c.Fill.ForeColor.RGB = vbGreen
+        Set root = sld.Shapes.Range(Array(inner.Name, c.Name)).Group
+        root.Rotation = 31
+        root.Flip msoFlipVertical
+        root.LockAspectRatio = msoFalse
+        root.Width = root.Width * 1.3
+        root.Height = root.Height * 0.8
+    End If
+    root.Name = "outer group": root.Tags.Add "GroupTag", "keep"
+    root.AlternativeText = "Group description"
+    rootId = root.Id
+    originalLeft = root.Left: originalTop = root.Top
+    originalWidth = root.Width: originalHeight = root.Height: originalRotation = root.Rotation
+    Set a = root.GroupItems("selected child"): Set b = root.GroupItems("neighbor")
+    bx = b.Left: by = b.Top: bw = b.Width: bh = b.Height: br = b.Rotation
+    Set effect = sld.TimeLine.MainSequence.AddEffect(root, msoAnimEffectAppear)
+    Set effect = sld.TimeLine.MainSequence.AddEffect(a, msoAnimEffectWipe, , msoAnimTriggerAfterPrevious)
+    effect.Timing.Duration = 1.2
+    Set effect = sld.TimeLine.MainSequence.AddEffect(b, msoAnimEffectFade, , msoAnimTriggerWithPrevious)
+    Set sequence = sld.TimeLine.InteractiveSequences.Add
+    Set effect = sequence.AddEffect(b, msoAnimEffectAppear, , msoAnimTriggerOnShapeClick)
+    effect.Exit = msoTrue
+    effect.Timing.TriggerShape = a
+    For Each effect In sld.TimeLine.MainSequence
+        Print #report, "BEFORE " & tag & " | " & effect.Shape.Name & " | " & effect.EffectType & " | " & effect.Timing.Duration
+    Next
+    If deck.Windows.Count = 0 Then Set window = deck.NewWindow Else Set window = deck.Windows(1)
+    window.Activate
+    window.ViewType = ppViewNormal
+    window.View.GotoSlide sld.SlideIndex
+    a.Select
+    Check window.Selection.HasChildShapeRange, tag & " child selection reached ribbon handler"
+    EZHighlightsClick Nothing
+    Set result = sld.Shapes(1)
+    For Each effect In sld.TimeLine.MainSequence
+        Print #report, "AFTER " & tag & " | " & effect.Shape.Name & " | " & effect.EffectType & " | " & effect.Timing.Duration
+    Next
+    Check result.Id <> rootId, tag & " group replacement completed"
+    Check sld.Shapes.Count = 1, tag & " no staging shapes left"
+    Check result.Type = msoGroup, tag & " outer group retained"
+    Check result.Name = "outer group" And result.Tags("GroupTag") = "keep", tag & " group name and tags"
+    Check result.AlternativeText = "Group description", tag & " group alt text"
+    Check Abs(result.Left - originalLeft) < 0.1 And Abs(result.Top - originalTop) < 0.1, tag & " group position"
+    Check Abs(result.Width - originalWidth) < 0.1 And Abs(result.Height - originalHeight) < 0.1, tag & " group size"
+    Check Abs(result.Rotation - originalRotation) < 0.1, tag & " group rotation"
+    If nested Then
+        Check result.VerticalFlip = msoTrue, tag & " outer flip"
+        Check result.GroupItems("outer neighbor").Fill.ForeColor.RGB = vbGreen, tag & " outer sibling preserved"
+    End If
+    For Each child In result.GroupItems
+        If child.Tags("EZHighlight") = "1" Then Set ink = child
+        If child.Tags("ChildTag") = "keep" Then Set a = child
+    Next
+    Set b = result.GroupItems("neighbor")
+    Check Not ink Is Nothing, tag & " selected child has native highlight"
+    Check a.Tags("ChildTag") = "keep" And a.Fill.Visible = msoFalse, tag & " editable child metadata"
+    Check b.Type = msoAutoShape And b.Fill.ForeColor.RGB = vbBlue, tag & " neighbor unchanged"
+    Check b.Name = "neighbor", tag & " neighbor name"
+    Check Abs(b.Left - bx) < 0.1 And Abs(b.Top - by) < 0.1, tag & " neighbor position preserved"
+    Check Abs(b.Width - bw) < 0.1 And Abs(b.Height - bh) < 0.1 And Abs(b.Rotation - br) < 0.1, tag & " neighbor transform preserved"
+    Check sld.TimeLine.MainSequence.Count = 4, tag & " animations retained with synchronized text"
+    Check sld.TimeLine.MainSequence(1).Shape.Id = result.Id, tag & " outer animation retargeted"
+    Check sld.TimeLine.MainSequence(2).Shape.Id = ink.Id, tag & " child animation retargeted"
+    Check Abs(sld.TimeLine.MainSequence(2).Timing.Duration - 1.2) < 0.001, tag & " child animation timing"
+    Check sld.TimeLine.MainSequence(3).Shape.Id = a.Id And sld.TimeLine.MainSequence(3).Timing.TriggerType = msoAnimTriggerWithPrevious, tag & " editable text animates with ink"
+    Check sld.TimeLine.MainSequence(4).Shape.Id = b.Id, tag & " sibling animation retargeted"
+    Check sld.TimeLine.InteractiveSequences(1)(1).Timing.TriggerShape.Id = ink.Id, tag & " child click trigger retained"
+    sld.Export deck.Path & "\" & IIf(nested, "group-nested", "group-simple") & ".png", "PNG", 1440, 810
+    Exit Sub
+failed:
+    Check False, tag & " runtime " & Err.Number & ": " & Err.Description
+    On Error Resume Next
 End Sub
 
 Public Sub PrepareMouseDraw()
