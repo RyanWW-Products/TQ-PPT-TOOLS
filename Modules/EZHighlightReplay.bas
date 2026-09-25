@@ -1,6 +1,187 @@
 Attribute VB_Name = "EZHighlightReplay"
 Option Explicit
 
+Private mAddingReplay As Boolean
+
+' Add a native entrance directly; no preliminary Fade or ungrouping is needed.
+Public Sub AddHighlightReplayClick(ByVal control As IRibbonControl)
+    Dim window As DocumentWindow, sld As Slide, selected As Selection, chosen As ShapeRange
+    Dim originals As New Collection, targets As New Collection, seen As Object
+    Dim target As Shape, template As Presentation, path As String, message As String, i As Long
+    On Error GoTo failed
+    If mAddingReplay Then Exit Sub
+    EZHighlightsCancel
+    If Application.Windows.Count = 0 Then Exit Sub
+    Set window = ActiveWindow
+    If window.ViewType <> ppViewNormal And window.ViewType <> ppViewSlide Then
+        MsgBox "Open a slide in Normal view and select an EZ Highlight first.", vbInformation, "Add Replay"
+        Exit Sub
+    End If
+    Set sld = window.View.Slide
+    Set selected = window.Selection
+    Set seen = CreateObject("Scripting.Dictionary")
+    If selected.Type = ppSelectionShapes Or selected.Type = ppSelectionText Then
+        If selected.HasChildShapeRange Then Set chosen = selected.ChildShapeRange Else Set chosen = selected.ShapeRange
+        For Each target In chosen
+            originals.Add target
+            CollectReplayTargets target, targets, seen
+        Next
+    End If
+    If targets.Count = 0 Then
+        MsgBox "Select an EZ Highlight first, then click Add Replay.", vbInformation, "Add Replay"
+        Exit Sub
+    End If
+    mAddingReplay = True
+    Application.StartNewUndoEntry
+    For Each target In targets
+        ' An existing Fade should not remain in front of the new safe entrance.
+        RepairHighlightAnimations sld, target
+        If Not HasReplayEntrance(sld, target) Then
+            If template Is Nothing Then Set template = OpenReplayTemplate(path)
+            AppendReplay sld, target, template
+        End If
+    Next
+    window.Activate
+    For i = 1 To originals.Count
+        originals(i).Select (i = 1)
+    Next
+    ' The pane exposes the new Replay's Start, Duration and Delay controls even
+    ' though PowerPoint still hides the gallery preset for grouped selections.
+    On Error Resume Next
+    If Not Application.CommandBars.GetPressedMso("AnimationCustom") Then Application.CommandBars.ExecuteMso "AnimationCustom"
+    On Error GoTo failed
+    GoTo cleanup
+failed:
+    message = Err.Description
+cleanup:
+    On Error Resume Next
+    If Not template Is Nothing Then template.Close
+    If Len(path) > 0 Then Kill path
+    mAddingReplay = False
+    On Error GoTo 0
+    If Len(message) > 0 Then MsgBox "Replay could not be added. " & message, vbExclamation, "Add Replay"
+End Sub
+
+Private Sub CollectReplayTargets(ByVal selected As Shape, ByVal targets As Collection, ByVal seen As Object)
+    Dim parent As Shape, part As Shape, precedingInk As Shape
+    If selected.Type = msoGroup Then
+        If selected.Tags("EZHighlight") = "1" Then
+            RememberReplayTarget selected, targets, seen
+        Else
+            ' GroupItems exposes flattened leaves; never animate ordinary
+            ' neighbors just because they share an outer group with highlights.
+            For Each part In selected.GroupItems
+                If part.Tags("EZHighlight") = "1" And (part.Type = msoInk Or part.Type = msoInkComment) Then
+                    RememberReplayTarget part, targets, seen
+                End If
+            Next
+        End If
+        Exit Sub
+    End If
+    On Error Resume Next
+    Set parent = selected.ParentGroup
+    On Error GoTo 0
+    If Not parent Is Nothing Then
+        If parent.Tags("EZHighlight") = "1" Then
+            RememberReplayTarget parent, targets, seen
+            Exit Sub
+        End If
+    End If
+    If selected.Tags("EZHighlight") = "1" And (selected.Type = msoInk Or selected.Type = msoInkComment) Then
+        RememberReplayTarget selected, targets, seen
+    ElseIf selected.Tags("EZHighlightMember") = "1" And Not parent Is Nothing Then
+        ' Existing highlights keep their editable member immediately after the
+        ' ink in the flattened paint order, including nested/duplicated groups.
+        ' Stop at any intervening non-ink member instead of selecting a neighbor.
+        For Each part In parent.GroupItems
+            If part.Id = selected.Id Then
+                If Not precedingInk Is Nothing Then RememberReplayTarget precedingInk, targets, seen
+                Exit For
+            End If
+            Set precedingInk = Nothing
+            If part.Tags("EZHighlight") = "1" And (part.Type = msoInk Or part.Type = msoInkComment) Then Set precedingInk = part
+        Next
+    End If
+End Sub
+
+Private Sub RememberReplayTarget(ByVal target As Shape, ByVal targets As Collection, ByVal seen As Object)
+    If seen.Exists(CStr(target.Id)) Then Exit Sub
+    seen.Add CStr(target.Id), True
+    targets.Add target
+End Sub
+
+Private Function HasReplayEntrance(ByVal sld As Slide, ByVal target As Shape) As Boolean
+    Dim ids As Object, part As Shape, sequence As Sequence
+    Set ids = CreateObject("Scripting.Dictionary")
+    ids(CStr(target.Id)) = True
+    If target.Type = msoGroup Then
+        For Each part In target.GroupItems
+            ids(CStr(part.Id)) = True
+        Next
+    Else
+        On Error Resume Next
+        Set part = target.ParentGroup
+        On Error GoTo 0
+        If Not part Is Nothing Then ids(CStr(part.Id)) = True
+    End If
+    If SequenceHasReplay(sld.TimeLine.MainSequence, ids) Then HasReplayEntrance = True: Exit Function
+    For Each sequence In sld.TimeLine.InteractiveSequences
+        If SequenceHasReplay(sequence, ids) Then HasReplayEntrance = True: Exit Function
+    Next
+End Function
+
+Private Function SequenceHasReplay(ByVal sequence As Sequence, ByVal ids As Object) As Boolean
+    Dim effect As Effect, kind As Long, native As Boolean
+    For Each effect In sequence
+        If ids.Exists(CStr(effect.Shape.Id)) Then
+            If effect.Exit = msoFalse Then
+                On Error Resume Next
+                Err.Clear
+                kind = effect.EffectType
+                native = (Err.Number <> 0)
+                On Error GoTo 0
+                If native And effect.Behaviors.Count = 2 Then
+                    If effect.Behaviors(1).Type = msoAnimTypeSet And effect.Behaviors(2).Type = msoAnimTypeProperty Then
+                        With effect.Behaviors(2).PropertyEffect.Points
+                            If .Count = 2 Then
+                                If .Item(1).Value = 0 And .Item(2).Value = 1 Then SequenceHasReplay = True: Exit Function
+                            End If
+                        End With
+                    End If
+                End If
+            End If
+        End If
+    Next
+End Function
+
+Private Sub AppendReplay(ByVal sld As Slide, ByVal target As Shape, ByVal template As Presentation)
+    Dim seed As Shape, seedEffect As Effect, copied As Effect, candidate As Effect
+    Dim sequence As Sequence, e As Long, message As String
+    On Error GoTo failed
+    Set sequence = sld.TimeLine.MainSequence
+    template.Slides(1).Shapes(1).Copy
+    Set seed = sld.Shapes.Paste()(1)
+    For Each candidate In sequence
+        If candidate.Shape.Id = seed.Id Then Set seedEffect = candidate: Exit For
+    Next
+    If seedEffect Is Nothing Then Err.Raise vbObjectError + 2720, , "PowerPoint did not copy the ink animation."
+    Set copied = sequence.Clone(seedEffect)
+    copied.Shape = target
+    copied.Timing.TriggerType = msoAnimTriggerOnPageClick
+    copied.Timing.Duration = 2
+    copied.Timing.TriggerDelayTime = 0
+    copied.MoveTo sequence.Count
+    seed.Delete
+    Exit Sub
+failed:
+    e = Err.Number: message = Err.Description
+    On Error Resume Next
+    If Not copied Is Nothing Then copied.Delete
+    If Not seed Is Nothing Then seed.Delete
+    On Error GoTo 0
+    Err.Raise e, "Add Replay", message
+End Sub
+
 ' Fade composites Windows Ink through black. Native Replay/Rewind animates
 ' drawProgress instead. PowerPoint hides those presets for grouped selections
 ' and does not expose them in MsoAnimEffect, so copy its native preset template.

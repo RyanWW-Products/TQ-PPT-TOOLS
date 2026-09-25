@@ -7,12 +7,13 @@ Private mDrawEvents As EZHighlightEvents
 Private mBusy As Boolean
 
 Public Sub EZHighlightsClick(ByVal control As IRibbonControl)
-    Dim selected As Selection, sld As Slide, source As Shape, result As Shape
+    Dim selected As Selection, sld As Slide, source As Shape, result As Shape, window As DocumentWindow
     Dim items As New Collection, i As Long, message As String, chosen As ShapeRange, isChild As Boolean, stage As String
     On Error GoTo failed
     If mBusy Then Exit Sub
     EZHighlightsCancel
     If Application.Windows.Count = 0 Then Exit Sub
+    Set window = ActiveWindow
     If ActiveWindow.ViewType <> ppViewNormal And ActiveWindow.ViewType <> ppViewSlide Then
         MsgBox "Open a slide in Normal view to use EZ Highlights.", vbInformation, "EZ Highlights"
         Exit Sub
@@ -45,6 +46,8 @@ Public Sub EZHighlightsClick(ByVal control As IRibbonControl)
             Next
         End If
         stage = "selecting result"
+        window.Activate
+        window.View.GotoSlide sld.SlideIndex
         result.Select
         mBusy = False
     Else

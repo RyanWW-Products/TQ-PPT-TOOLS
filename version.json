@@ -1,5 +1,5 @@
 ﻿{
-    "addinVersion":  "5.6.9",
+    "addinVersion":  "5.6.10",
     "assetsVersion":  2,
-    "notes":  "Fixes the black Fade artifact on EZ Highlights by replacing ink Fade effects with native Replay/Rewind. Select an existing highlight and click EZ Highlights again to repair its Fades. Preserves groups, editable text fades, timing, animation order and shape-click triggers. Repaired animations play from the saved presentation without the add-in."
+    "notes":  "Adds an Add Replay button beside EZ Highlights. Select newly drawn or existing highlights to add native Replay directly, without adding Fade or ungrouping first. Opens the Animation Pane with a two-second On Click entrance. Supports highlights inside nested groups, skips ordinary neighbors, and preserves existing Replay effects and edited timing. Saved animations work without the add-in."
 }

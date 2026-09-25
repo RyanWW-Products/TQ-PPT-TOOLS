@@ -52,11 +52,11 @@ try {
             $component=$components.Add(2)
             $component.Name=$name
             $component.CodeModule.AddFromString($body)
-        }elseif($relative -eq 'Modules/EZHighlights.bas'){
+        }elseif($relative -in @('Modules/EZHighlights.bas','Modules/EZHighlightReplay.bas')){
             $body=[IO.File]::ReadAllText($sourcePath)
             $body=[regex]::Replace($body,'(?m)^Attribute [^\r\n]*(?:\r?\n|$)','')
             $body=$body.Replace('MsgBox ', 'EZHighlightsTests.TestMessage ')
-            $component=$components.Add(1);$component.Name='EZHighlights'
+            $component=$components.Add(1);$component.Name=[IO.Path]::GetFileNameWithoutExtension($relative)
             $component.CodeModule.AddFromString($body)
         }else{[void]$components.Import($sourcePath)}
     }
@@ -64,6 +64,7 @@ try {
     [void][EZTestRunner]::Run($ppt,'EZHighlightsRegression.pptm!EZHighlightsTests.RunAll')
     $report=Get-Content -LiteralPath (Join-Path $outputDirectory 'report.txt') -Raw
     $report -split '\r?\n' | Where-Object {$_ -match '^(FAIL|RESULT)'} | Write-Output
+    if(Test-Path -LiteralPath (Join-Path $outputDirectory 'ui-errors.txt')){throw (Get-Content -LiteralPath (Join-Path $outputDirectory 'ui-errors.txt') -Raw)}
     if($MouseTest){
         Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
@@ -75,6 +76,8 @@ public static class EZMouseTest {
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")]public static extern IntPtr GetAncestor(IntPtr h,uint flags);
  [DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")]public static extern bool IsIconic(IntPtr h);
+ [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int command);
  [DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);
  [DllImport("user32.dll")]public static extern void mouse_event(uint flags,uint x,uint y,uint data,UIntPtr extra);
  [DllImport("user32.dll")]public static extern void keybd_event(byte key,byte scan,uint flags,UIntPtr extra);
@@ -87,9 +90,12 @@ public static class EZMouseTest {
             catch{if($attempt -eq 19){throw};Start-Sleep -Milliseconds 150}
         }
         $handle=[EZMouseTest]::GetAncestor([IntPtr]$points[0],2)
+        if([EZMouseTest]::IsIconic($handle)){[void][EZMouseTest]::ShowWindow($handle,9)}
         [void][EZMouseTest]::SetWindowPos($handle,[IntPtr](-1),0,0,0,0,0x43)
         [void][EZMouseTest]::SetForegroundWindow($handle)
+        Start-Sleep -Milliseconds 200
         if([EZMouseTest]::GetForegroundWindow() -ne $handle){throw 'The test PowerPoint window could not take mouse focus.'}
+        $points=[EZTestRunner]::Coordinates($ppt)
         [void][EZMouseTest]::SetCursorPos($points[1],$points[2])
         Start-Sleep -Milliseconds 150
         [EZMouseTest]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
@@ -120,6 +126,10 @@ public static class EZMouseTest {
             throw ('Real mouse draw did not produce one EZ Highlight; shapes='+$last.Shapes.Count)
         }
         Write-Output 'PASS | real mouse drag created an EZ Highlight'
+        [void][EZTestRunner]::Run($ppt,'EZHighlightsRegression.pptm!EZHighlightsTests.AddReplayToMouseHighlight')
+        if($last.TimeLine.MainSequence.Count -ne 1 -or $last.TimeLine.MainSequence.Item(1).Shape.Id -ne $last.Shapes.Item(1).Id){throw 'Add Replay did not directly animate the mouse-drawn highlight.'}
+        if(Test-Path -LiteralPath (Join-Path $outputDirectory 'ui-errors.txt')){throw (Get-Content -LiteralPath (Join-Path $outputDirectory 'ui-errors.txt') -Raw)}
+        Write-Output 'PASS | Add Replay directly animates the mouse-drawn highlight'
         [void][EZTestRunner]::Run($ppt,'EZHighlightsRegression.pptm!EZHighlightsTests.ArmMouseDraw')
         [EZMouseTest]::keybd_event(27,0,0,[UIntPtr]::Zero)
         [EZMouseTest]::keybd_event(27,0,2,[UIntPtr]::Zero)
@@ -152,7 +162,7 @@ public static class EZMouseTest {
     }
     $highlights=0
     foreach($slide in $deck.Slides){foreach($shape in $slide.Shapes){$highlights+=Count-Highlights $shape}}
-    $expectedHighlights=14
+    $expectedHighlights=18
     if($MouseTest){$expectedHighlights++}
     if($highlights -ne $expectedHighlights){throw "Save/reopen did not retain all native highlights: $highlights"}
     Write-Output "PASS | macro-free save/reopen retained $highlights highlights"

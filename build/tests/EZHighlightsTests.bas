@@ -14,10 +14,116 @@ Public Sub RunAll()
     RunGroupCase deck, True
     RunMultiChildCase deck
     RunReplayCase deck
+    RunAddReplayCase deck
+    RunGroupedReplayButtonCase deck
 
     Print #report, "RESULT | checks=" & checks & " failures=" & failures
     Close #report
     deck.Save
+End Sub
+
+Private Sub RunAddReplayCase(ByVal deck As Presentation)
+    Dim sld As Slide, source As Shape, highlight As Shape, neighbor As Shape, faded As Shape
+    Dim effect As Effect, window As DocumentWindow, count As Long, originalId As Long
+    On Error GoTo failed
+    Set sld = deck.Slides.Add(deck.Slides.Count + 1, ppLayoutBlank)
+    sld.Name = "Add Replay on fresh highlight"
+    Set neighbor = sld.Shapes.AddTextbox(msoTextOrientationHorizontal, 35, 55, 650, 55)
+    neighbor.TextFrame.TextRange.Text = "BLACK text under YELLOW native ink"
+    neighbor.TextFrame.TextRange.Font.Size = 24
+    neighbor.TextFrame.TextRange.Font.Color.RGB = vbBlack
+    If deck.Windows.Count = 0 Then Set window = deck.NewWindow Else Set window = deck.Windows(1)
+    window.Activate: window.ViewType = ppViewNormal: window.View.GotoSlide sld.SlideIndex
+    Set source = sld.Shapes.AddShape(msoShapeRectangle, 35, 60, 500, 45)
+    EZHighlightsDrawn sld, source
+    Set highlight = sld.Shapes(2)
+    originalId = highlight.Id
+    Check sld.TimeLine.MainSequence.Count = 0, "newly drawn highlight needs no preliminary animation"
+    highlight.Select
+    AddHighlightReplayClick Nothing
+    Check sld.TimeLine.MainSequence.Count = 1, "Add Replay creates one entrance directly on a new highlight"
+    Set effect = sld.TimeLine.MainSequence(1)
+    Check effect.Shape.Id = originalId And highlight.Type = msoGroup, "Add Replay keeps the intact highlight group"
+    Check effect.Exit = msoFalse And effect.Behaviors(2).Type = msoAnimTypeProperty, "Add Replay uses a native replay entrance"
+    Check effect.Behaviors(2).PropertyEffect.Points(1).Value = 0 And effect.Behaviors(2).PropertyEffect.Points(2).Value = 1, "Replay draws from zero to full ink"
+    Check Abs(effect.Timing.Duration - 2) < 0.01 And effect.Timing.TriggerDelayTime = 0, "new Replay defaults to two seconds without delay"
+    Check effect.Timing.TriggerType = msoAnimTriggerOnPageClick, "new Replay defaults to On Click"
+    Check Application.CommandBars.GetPressedMso("AnimationCustom"), "Add Replay opens the Animation Pane"
+    Check sld.Shapes.Count = 2, "Add Replay removes its staging shape"
+    effect.Timing.Duration = 1.2: effect.Timing.TriggerDelayTime = 0.3
+    highlight.Select: neighbor.Select msoFalse
+    AddHighlightReplayClick Nothing
+    Check sld.TimeLine.MainSequence.Count = 1, "repeated Add Replay ignores ordinary neighbors and avoids duplicates"
+    Set effect = sld.TimeLine.MainSequence(1)
+    Check Abs(effect.Timing.Duration - 1.2) < 0.01 And Abs(effect.Timing.TriggerDelayTime - 0.3) < 0.01, "repeated Add Replay retains edited timing"
+    effect.Timing.Duration = 2: effect.Timing.TriggerDelayTime = 0
+
+    Set source = sld.Shapes.AddShape(msoShapeRectangle, 80, 180, 250, 30)
+    Set faded = EZHighlightsConvert(sld, source)
+    Set effect = sld.TimeLine.MainSequence.AddEffect(faded, msoAnimEffectFade)
+    effect.Timing.Duration = 1.1: effect.Timing.TriggerDelayTime = 0.25
+    window.Activate: window.View.GotoSlide sld.SlideIndex
+    faded.Select
+    AddHighlightReplayClick Nothing
+    Check sld.TimeLine.MainSequence.Count = 4, "Add Replay repairs existing Fade without adding a second entrance"
+    For count = 2 To 4
+        Set effect = sld.TimeLine.MainSequence(count)
+        Check Abs(effect.Timing.Duration - 1.1) < 0.01 And Abs(effect.Timing.TriggerDelayTime - 0.25) < 0.01, "Add Replay retains preexisting Fade timing"
+    Next
+    Check sld.Shapes.Count = 3 And highlight.Id = originalId, "Fade repair leaves the first highlight and shapes intact"
+    Exit Sub
+failed:
+    Check False, "Add Replay button runtime " & Err.Number & ": " & Err.Description
+End Sub
+
+Private Sub RunGroupedReplayButtonCase(ByVal deck As Presentation)
+    Dim sld As Slide, a As Shape, b As Shape, neighbor As Shape, inner As Shape, root As Shape, part As Shape
+    Dim inkA As Shape, inkB As Shape, editableB As Shape, window As DocumentWindow, effect As Effect
+    Dim originalId As Long, leafCount As Long, left As Single, top As Single, width As Single, height As Single
+    On Error GoTo failed
+    Set sld = deck.Slides.Add(deck.Slides.Count + 1, ppLayoutBlank)
+    Set a = sld.Shapes.AddShape(msoShapeRectangle, 80, 80, 150, 40)
+    Set b = sld.Shapes.AddShape(msoShapeOval, 260, 80, 140, 40)
+    Set inner = sld.Shapes.Range(Array(a.Name, b.Name)).Group
+    inner.Rotation = 18
+    Set neighbor = sld.Shapes.AddShape(msoShapeRectangle, 450, 200, 70, 40)
+    neighbor.Name = "unanimated neighbor"
+    Set root = sld.Shapes.Range(Array(inner.Name, neighbor.Name)).Group
+    root.Rotation = 12: root.Flip msoFlipHorizontal
+    If deck.Windows.Count = 0 Then Set window = deck.NewWindow Else Set window = deck.Windows(1)
+    window.Activate: window.ViewType = ppViewNormal: window.View.GotoSlide sld.SlideIndex
+    Set a = root.GroupItems(1): Set b = root.GroupItems(2)
+    a.Select: b.Select msoFalse
+    EZHighlightsClick Nothing
+    Set root = sld.Shapes(1)
+    For Each part In root.GroupItems
+        If part.Tags("EZHighlight") = "1" Then
+            If inkA Is Nothing Then Set inkA = part Else Set inkB = part
+        End If
+        If part.Tags("EZHighlightMember") = "1" Then Set editableB = part
+    Next
+    Check Not inkA Is Nothing And Not inkB Is Nothing, "nested group contains two highlights ready for Replay"
+    originalId = root.Id: leafCount = root.GroupItems.Count
+    left = root.Left: top = root.Top: width = root.Width: height = root.Height
+    inkA.Select
+    AddHighlightReplayClick Nothing
+    Check sld.TimeLine.MainSequence.Count = 1 And sld.TimeLine.MainSequence(1).Shape.Id = inkA.Id, "Replay targets only the selected grouped ink"
+    Set effect = sld.TimeLine.MainSequence(1)
+    effect.Timing.Duration = 1.3: effect.Timing.TriggerDelayTime = 0.2
+    window.Activate: window.View.GotoSlide sld.SlideIndex
+    editableB.Select
+    AddHighlightReplayClick Nothing
+    Check sld.TimeLine.MainSequence.Count = 2 And sld.TimeLine.MainSequence(2).Shape.Id = inkB.Id, "selecting a retained member targets only its matching grouped ink"
+    window.Activate: window.View.GotoSlide sld.SlideIndex
+    root.Select
+    AddHighlightReplayClick Nothing
+    Check sld.TimeLine.MainSequence.Count = 2, "whole-group Replay skips already animated highlights and ordinary neighbors"
+    Check Abs(sld.TimeLine.MainSequence(1).Timing.Duration - 1.3) < 0.01 And Abs(sld.TimeLine.MainSequence(1).Timing.TriggerDelayTime - 0.2) < 0.01, "group Replay preserves existing order and timing"
+    Check root.Id = originalId And root.GroupItems.Count = leafCount And sld.Shapes.Count = 1, "group Replay retains hierarchy without staging shapes"
+    Check Abs(root.Left - left) < 0.01 And Abs(root.Top - top) < 0.01 And Abs(root.Width - width) < 0.01 And Abs(root.Height - height) < 0.01, "group Replay retains transformed geometry"
+    Exit Sub
+failed:
+    Check False, "group Add Replay button runtime " & Err.Number & ": " & Err.Description
 End Sub
 
 Private Sub RunReplayCase(ByVal deck As Presentation)
@@ -247,6 +353,10 @@ End Sub
 Public Sub ArmMouseDraw()
     ActiveWindow.Selection.Unselect
     EZHighlightsClick Nothing
+End Sub
+
+Public Sub AddReplayToMouseHighlight()
+    AddHighlightReplayClick Nothing
 End Sub
 
 Public Sub PlainRectangleMode()

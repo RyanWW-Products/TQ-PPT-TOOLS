@@ -12,13 +12,22 @@ read-only token to pull updates.
 
 ## EZ Highlights
 
-The **EZ Highlights** button sits between Auto Callout and Shape Tools.
+The **EZ Highlights** and **Add Replay** buttons sit between Auto Callout and Shape Tools.
 With nothing selected, click it and drag a rectangle on the slide. With one or
 more shapes selected, click it to convert them. Press Escape to cancel drawing.
 To highlight shapes inside a group, select the group and then click the desired
 child shape (Shift-click to select additional children), then click EZ Highlights.
 The containing group, nested layout and unselected neighbors are retained.
 For a grouped shape containing text, matching ink/text animations run together.
+
+To animate a new highlight, select it and click **Add Replay**. This adds a native
+Replay entrance directly and opens the Animation Pane. The default is **On Click**
+with a **2-second** duration; adjust Start, Duration and Delay there as usual.
+No preliminary Fade or ungrouping is needed. Multiple selected highlights and
+highlights inside nested groups are supported; ordinary neighbors are skipped.
+Clicking Add Replay again preserves existing Replay effects and their timing.
+PowerPoint's built-in gallery still hides its Replay preset for grouped objects;
+the dedicated button supplies that action.
 
 Highlights use embedded Windows Ink with `#FFFF00`, zero transparency and the
 native `MaskPen` highlighter operation. Black text remains black beneath the
