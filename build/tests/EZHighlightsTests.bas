@@ -13,10 +13,70 @@ Public Sub RunAll()
     RunGroupCase deck, False
     RunGroupCase deck, True
     RunMultiChildCase deck
+    RunReplayCase deck
 
     Print #report, "RESULT | checks=" & checks & " failures=" & failures
     Close #report
     deck.Save
+End Sub
+
+Private Sub RunReplayCase(ByVal deck As Presentation)
+    Dim sld As Slide, source As Shape, highlight As Shape, neighbor As Shape, trigger As Shape
+    Dim effect As Effect, sequence As Sequence, part As Shape, beforeCount As Long, inkCount As Long, textCount As Long
+    Dim afterCount As Long, savedId As Long, duration As Single, delay As Single
+    On Error GoTo failed
+    Set sld = deck.Slides.Add(deck.Slides.Count + 1, ppLayoutBlank)
+    Set neighbor = sld.Shapes.AddTextbox(msoTextOrientationHorizontal, 35, 60, 600, 55)
+    neighbor.TextFrame.TextRange.Text = "BLACK text under YELLOW native ink"
+    neighbor.TextFrame.TextRange.Font.Size = 24
+    Set source = sld.Shapes.AddShape(msoShapeRectangle, 35, 60, 500, 45)
+    source.TextFrame.TextRange.Text = "Editable caption"
+    Set effect = sld.TimeLine.MainSequence.AddEffect(source, msoAnimEffectFade)
+    effect.Timing.Duration = 2.4: effect.Timing.TriggerDelayTime = 0.35
+    Set effect = sld.TimeLine.MainSequence.AddEffect(source, msoAnimEffectFade, , msoAnimTriggerAfterPrevious)
+    effect.Exit = msoTrue
+    effect.Timing.Duration = 1.6: effect.Timing.TriggerDelayTime = 0.2
+    Set highlight = EZHighlightsConvert(sld, source)
+    savedId = highlight.Id: beforeCount = sld.Shapes.Count
+    EZHighlightReplay.RepairHighlightAnimations sld, highlight
+    Check highlight.Id = savedId And sld.Shapes.Count = beforeCount, "Replay repair retains the group and removes staging shapes"
+    For Each effect In sld.TimeLine.MainSequence
+        Set part = effect.Shape
+        If effect.Exit Then duration = 1.6: delay = 0.2 Else duration = 2.4: delay = 0.35
+        Check Abs(effect.Timing.Duration - duration) < 0.01, "Replay retains effect duration"
+        Check Abs(effect.Timing.TriggerDelayTime - delay) < 0.01, "Replay retains effect delay"
+        Check effect.Timing.RepeatCount <= 1, "Replay does not add animation repeats"
+        If part.Type = msoInk Or part.Type = msoInkComment Then
+            inkCount = inkCount + 1
+            Check effect.Behaviors.Count = 2, "ink uses native draw-progress animation"
+        Else
+            textCount = textCount + 1
+            Check effect.EffectType = msoAnimEffectFade, "editable caption retains Fade"
+        End If
+    Next
+    Check inkCount = 4 And textCount = 2, "both ink strokes and editable caption have entry and exit effects"
+    Check sld.TimeLine.MainSequence(1).Timing.TriggerType = msoAnimTriggerOnPageClick, "Replay retains entrance click"
+    Check sld.TimeLine.MainSequence(4).Timing.TriggerType = msoAnimTriggerAfterPrevious, "Rewind retains after-previous start"
+    afterCount = sld.TimeLine.MainSequence.Count
+    EZHighlightReplay.RepairHighlightAnimations sld, highlight
+    Check sld.TimeLine.MainSequence.Count = afterCount, "repeating Replay repair adds no animations"
+    Set trigger = sld.Shapes.AddShape(msoShapeOval, 590, 250, 50, 50)
+    Set sequence = sld.TimeLine.InteractiveSequences.Add
+    Set effect = sequence.AddEffect(highlight, msoAnimEffectFade, , msoAnimTriggerOnShapeClick)
+    effect.Timing.TriggerShape = trigger
+    effect.Timing.Duration = 3.2: effect.Timing.TriggerDelayTime = 0.6
+    EZHighlightReplay.RepairHighlightAnimations sld, highlight
+    Check sld.TimeLine.InteractiveSequences.Count = 1, "Replay keeps one interactive sequence"
+    Set sequence = sld.TimeLine.InteractiveSequences(1)
+    Check sequence.Count = 3, "interactive Replay and caption run together"
+    For Each effect In sequence
+        Check effect.Timing.TriggerShape.Id = trigger.Id, "interactive Replay retains click target"
+        Check Abs(effect.Timing.Duration - 3.2) < 0.01 And Abs(effect.Timing.TriggerDelayTime - 0.6) < 0.01, "interactive Replay retains timing"
+    Next
+    Check sld.Shapes.Count = beforeCount + 1, "interactive repair removes staging shape"
+    Exit Sub
+failed:
+    Check False, "Replay case runtime " & Err.Number & ": " & Err.Description
 End Sub
 
 Private Sub RunMultiChildCase(ByVal deck As Presentation)
@@ -52,7 +112,7 @@ Private Sub RunMultiChildCase(ByVal deck As Presentation)
     Check root.GroupItems("untouched").Fill.ForeColor.RGB = vbGreen, "multi-selection leaves unselected neighbor unchanged"
     Check sld.Shapes.Count = 1, "multi-selection leaves one containing group"
     Check sld.TimeLine.MainSequence.Count = 5, "multiple effects retain synchronized editable text"
-    Check sld.TimeLine.MainSequence(1).EffectType = msoAnimEffectWipe And sld.TimeLine.MainSequence(3).EffectType = msoAnimEffectFade, "multiple child animation order"
+    Check sld.TimeLine.MainSequence(1).EffectType = msoAnimEffectWipe And sld.TimeLine.MainSequence(3).Behaviors(1).Type = msoAnimTypeProperty, "multiple child animation order with safe ink exit"
     Check sld.TimeLine.MainSequence(3).Exit And sld.TimeLine.MainSequence(4).Exit, "ink and editable text retain exit effects"
     originalId = root.Id: originalShapeCount = root.GroupItems.Count
     ink.Select

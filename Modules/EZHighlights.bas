@@ -37,9 +37,11 @@ Public Sub EZHighlightsClick(ByVal control As IRibbonControl)
         stage = "converting selection"
         If isChild Then
             Set result = ConvertGroupChildren(sld, items)
+            EZHighlightReplay.RepairHighlightAnimations sld, result
         Else
             For Each source In items
                 Set result = EZHighlightsConvert(sld, source)
+                EZHighlightReplay.RepairHighlightAnimations sld, result
             Next
         End If
         stage = "selecting result"

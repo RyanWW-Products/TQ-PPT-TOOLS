@@ -4,7 +4,7 @@
        <tab id="CustomTab" label="Trial Quest"> 
          <group id="SampleGroup" label="Macros">
            <button id="Button" label="Auto Callout" size="large" onAction="CalloutAnimation" image="CalloutLogo"/>
-           <button id="ButtonEZHighlights" label="EZ Highlights" size="large" onAction="EZHighlightsClick" imageMso="InkHighlighter" screentip="EZ Highlights" supertip="Draw a yellow ink highlight, or convert selected shapes while preserving their text and animations. Highlights are embedded in the presentation for Windows PowerPoint."/>
+           <button id="ButtonEZHighlights" label="EZ Highlights" size="large" onAction="EZHighlightsClick" imageMso="InkHighlighter" screentip="EZ Highlights" supertip="Draw a yellow ink highlight or convert selected shapes, including shapes inside groups. Click an existing highlight again to replace ink Fade effects with smooth Replay/Rewind while keeping their timing. Highlights and animations stay embedded in the presentation."/>
            <menu id="MenuShapeTools" label="Shape Tools" size="large" image="MM-logo" supertip="Mighty Morpher, Custom Slides from Hidden, Spaced Out, Toggle Gradient, Bulk Rename and more.">
              <button id="Button2" label="Mighty Morpher" onAction="MightyMorpher" image="MM-logo"/>
              <button id="Button5" label="Custom Slides from Hidden" onAction="CustomFromHidden" image="CustomfromHidden"/>

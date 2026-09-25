@@ -25,8 +25,19 @@ native `MaskPen` highlighter operation. Black text remains black beneath the
 highlight. Each result is a normal PowerPoint group containing native ink and
 an editable copy of the original shape with its fill and outline hidden. Shape
 geometry, text, tags, stacking position and animation effects are retained;
-animation click triggers are reassigned to the result. Clicking the button on
-an existing EZ Highlight leaves it unchanged.
+animation click triggers are reassigned to the result.
+
+PowerPoint's Fade effect can flash black on native ink, and its animation gallery
+hides Replay/Rewind for ink inside groups. EZ Highlights replaces ink entrance
+Fades with native Replay and exit Fades with Rewind. Timing, order and shape-click
+triggers are retained; editable text keeps its ordinary Fade. This happens when
+converting a shape that already has Fade. If you add Fade afterward, select the
+existing highlight and click **EZ Highlights** again to repair it. Repeating this
+does not add duplicate effects. Unanimated highlights stay unanimated.
+
+The macro-free Replay/Rewind template in `build/templates/InkReplayTemplate.pptx`
+is embedded in VBA by `build/embed-ink-replay-template.ps1`; it is not a runtime
+download. PowerPoint's VBA enum cannot create these native effects directly.
 
 Conversion supports AutoShapes, freeforms and text boxes, including selected
 children inside groups. Whole groups, pictures, charts, lines and shapes with 3-D effects are left unchanged with an
@@ -35,7 +46,7 @@ the ink; resize or rotate the complete group to keep them aligned.
 
 The saved `.pptx` displays its highlights in Windows desktop PowerPoint without
 this add-in or any linked assets. Native Ink has PowerPoint limitations: standard
-PDF/image export and printing can look faded, some animated transitions can show
+PDF/image export and printing can look faded, other animated transitions can show
 artifacts, and Mac/web rendering is not equivalent. See
 [Microsoft's ink pen documentation](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/mpc/pens-and-pen-options)
 and [DoneBy5's native-ink compatibility FAQ](https://doneby5.com/HP.html).

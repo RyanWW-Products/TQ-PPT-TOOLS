@@ -1,5 +1,5 @@
 ﻿{
-    "addinVersion":  "5.6.8",
+    "addinVersion":  "5.6.9",
     "assetsVersion":  2,
-    "notes":  "EZ Highlights now supports selected shapes inside groups, including multiple children and nested, rotated or flipped groups. Preserves layout and synchronizes ink/text animations. Fixes the updater erasing the saved PAT, channel and other settings when recording an installed version. If an older updater already cleared the token, save it once after installing this version. Timeline behavior is unchanged."
+    "notes":  "Fixes the black Fade artifact on EZ Highlights by replacing ink Fade effects with native Replay/Rewind. Select an existing highlight and click EZ Highlights again to repair its Fades. Preserves groups, editable text fades, timing, animation order and shape-click triggers. Repaired animations play from the saved presentation without the add-in."
 }

@@ -41,7 +41,7 @@ try {
     $project=$deck.VBProject
     if($null -eq $project){throw 'Trusted VBA project access is required.'}
     $components=$project.VBComponents
-    foreach($relative in @('Modules/EZHighlightEvents.cls','Modules/EZHighlightInk.bas','Modules/EZHighlights.bas','build/tests/EZHighlightsTests.bas')) {
+    foreach($relative in @('Modules/EZHighlightEvents.cls','Modules/EZHighlightInk.bas','Modules/EZHighlightReplayData.bas','Modules/EZHighlightReplay.bas','Modules/EZHighlights.bas','build/tests/EZHighlightsTests.bas')) {
         if($SourcePptm -and $relative.StartsWith('Modules/')){continue}
         $sourcePath=Join-Path $repoRoot $relative
         if($relative.EndsWith('.cls')){
@@ -152,7 +152,7 @@ public static class EZMouseTest {
     }
     $highlights=0
     foreach($slide in $deck.Slides){foreach($shape in $slide.Shapes){$highlights+=Count-Highlights $shape}}
-    $expectedHighlights=13
+    $expectedHighlights=14
     if($MouseTest){$expectedHighlights++}
     if($highlights -ne $expectedHighlights){throw "Save/reopen did not retain all native highlights: $highlights"}
     Write-Output "PASS | macro-free save/reopen retained $highlights highlights"
